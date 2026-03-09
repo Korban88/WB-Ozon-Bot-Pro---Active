@@ -2,19 +2,25 @@
 Design concepts handler.
 
 Step 7: Generate & display 5 detailed text design TZ (technical specs).
-Step 8: Render 5 card mockup images using OpenAI gpt-image-1 (Pillow fallback).
+Step 8: Generate visual card mockups via 3-layer pipeline:
+    Layer 1 → gpt-image-1 generates styled background (empty, no product, no text)
+    Layer 2 → rembg removes product background + Pillow composites product with shadow
+    Layer 3 → Pillow overlays accurate text (title + features)
+    Fallback → Pillow-only card if OpenAI unavailable
 """
 
 import html
 
+import config as _cfg
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery
 
 from keyboards import after_design_keyboard, after_visuals_keyboard
 from logger_setup import log_error, log_event
-from services.card_renderer import overlay_text_on_image, render_card
-from services.openai_image import build_image_prompt, generate_card_image
+from services.background_gen import generate_background, pillow_gradient_background
+from services.card_composer import compose_card
+from services.card_renderer import render_card_pillow
 from services.openrouter import generate_design_concepts
 from states import Dialog
 from utils.images import send_step_image
@@ -31,17 +37,14 @@ _CATEGORY = {
     "other":       "Другое",
 }
 
-# Эмодзи-номера для концептов
 _INDEX_EMOJI = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣"}
 
 
 def _e(text: str) -> str:
-    """Escape HTML special characters in dynamic content."""
     return html.escape(str(text))
 
 
 def _format_concept(concept: dict, title: str, marketplace: str, category: str) -> str:
-    """Format one TZ concept as a styled HTML message."""
     index       = concept.get("index",       1)
     name        = concept.get("name",        "Концепт")
     colors      = concept.get("colors",      "—")
@@ -52,9 +55,8 @@ def _format_concept(concept: dict, title: str, marketplace: str, category: str) 
     cat = _CATEGORY.get(category, category)
     num = _INDEX_EMOJI.get(index, f"{index}.")
 
-    # Typography may contain \n — split into lines for italic formatting
     typo_lines = _e(typography).replace("\\n", "\n").split("\n")
-    typo_html  = "\n".join(f"<i>{line.strip()}</i>" for line in typo_lines if line.strip())
+    typo_html  = "\n".join(f"<i>{ln.strip()}</i>" for ln in typo_lines if ln.strip())
 
     return (
         f"{num} <b>КОНЦЕПТ {index}/5 — «{_e(name)}»</b>\n"
@@ -168,7 +170,7 @@ async def cb_design_concepts(callback: CallbackQuery, state: FSMContext) -> None
     )
 
 
-# ── Step 8: Render visual card mockups ────────────────────────────────────────
+# ── Step 8: Visual card mockups (3-layer pipeline) ─────────────────────────────
 @router.callback_query(F.data == "action:visual_concepts")
 async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None:
     user = callback.from_user
@@ -179,8 +181,8 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
     data        = await state.get_data()
     concepts    = data.get("concepts",    [])
     title       = data.get("title",       "Товар")
-    category    = data.get("category",    "other")    # ← FIX: was missing
-    marketplace = data.get("marketplace", "wb")       # ← FIX: was missing
+    category    = data.get("category",    "other")
+    marketplace = data.get("marketplace", "wb")
     card        = data.get("card",        {})
     photo_bytes = data.get("photo_bytes", None)
 
@@ -197,17 +199,22 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
         )
         return
 
-    import config as _cfg
     use_openai = bool(_cfg.OPENAI_API_KEY)
 
     progress_msg = await send_step_image(
         callback.message,
         step="generating",
         caption=(
-            "⏳ <b>Генерирую визуальные макеты карточек...</b>\n\n"
-            f"{'🤖 OpenAI gpt-image-1' if use_openai else '🎨 Pillow-рендер'} · "
-            f"5 концептов для <b>{_e(title)}</b>.\n"
-            f"{'Обычно 30–90 секунд.' if use_openai else 'Обычно 5–10 секунд.'}"
+            "⏳ <b>Генерирую карточки по 3-слойному pipeline...</b>\n\n"
+            + (
+                "🤖 <b>Слой 1:</b> gpt-image-1 → стильный фон\n"
+                "✂️ <b>Слой 2:</b> rembg → вырезаю товар + тень\n"
+                "✏️ <b>Слой 3:</b> Pillow → текст карточки\n\n"
+                "Обычно 40–90 сек на карточку."
+                if use_openai else
+                "🎨 <b>Pillow-рендер</b> (OpenAI ключ не задан)\n"
+                "Обычно 5–10 секунд."
+            )
         ),
     )
 
@@ -224,51 +231,52 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
 
         image_bytes = None
 
-        # ── Primary: OpenAI gpt-image-1 → Pillow text overlay ─────────────────
+        # ── 3-layer pipeline (OpenAI + rembg + Pillow) ─────────────────────────
         if use_openai:
-            prompt = build_image_prompt(
-                concept     = concept,
-                title       = title,
-                features    = features,
-                marketplace = marketplace,
-                category    = category,
-            )
-            ai_visual = await generate_card_image(
+            # Layer 1: generate background
+            bg_bytes = await generate_background(
+                concept       = concept,
+                marketplace   = marketplace,
+                category      = category,
                 user_id       = user.id,
                 username      = user.username,
-                prompt        = prompt,
-                photo_bytes   = photo_bytes,
                 concept_index = index,
             )
-            if ai_visual is not None:
-                # Overlay accurate text on the AI-generated visual
-                try:
-                    image_bytes = overlay_text_on_image(
-                        base_bytes = ai_visual,
-                        title      = title,
-                        features   = features,
-                        colors_str = colors,
-                    )
-                except Exception as exc:
-                    log_error(user.id, user.username, f"overlay_{index}", str(exc))
-                    image_bytes = ai_visual  # send without overlay if it fails
 
-        # ── Fallback: full Pillow renderer ─────────────────────────────────────
-        if image_bytes is None:
+            if bg_bytes is None:
+                bg_bytes = pillow_gradient_background(colors)
+
+            # Layers 2 + 3: product cutout + text overlay
             try:
-                image_bytes = render_card(
-                    photo_bytes = photo_bytes,
-                    title       = title,
-                    features    = features,
-                    colors_str  = colors,
+                image_bytes = compose_card(
+                    background_bytes = bg_bytes,
+                    product_bytes    = photo_bytes,
+                    title            = title,
+                    features         = features,
+                    colors_str       = colors,
                 )
             except Exception as exc:
-                log_error(user.id, user.username, f"render_card_{index}", str(exc))
+                log_error(user.id, user.username, f"compose_{index}", str(exc))
 
+        # ── Fallback: Pillow-only ──────────────────────────────────────────────
+        if image_bytes is None:
+            try:
+                bg_bytes    = pillow_gradient_background(colors)
+                image_bytes = render_card_pillow(
+                    background_bytes = bg_bytes,
+                    product_bytes    = photo_bytes,
+                    title            = title,
+                    features         = features,
+                    colors_str       = colors,
+                )
+            except Exception as exc:
+                log_error(user.id, user.username, f"pillow_render_{index}", str(exc))
+
+        # ── Send result ────────────────────────────────────────────────────────
         if image_bytes:
             try:
                 await callback.message.answer_photo(
-                    photo      = BufferedInputFile(image_bytes, filename=f"card_concept_{index}.png"),
+                    photo      = BufferedInputFile(image_bytes, filename=f"card_{index}.png"),
                     caption    = f"<b>Концепт {index}/5 — {_e(name)}</b>\n<code>{_e(colors)}</code>",
                     parse_mode = "HTML",
                 )
@@ -279,7 +287,7 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
         else:
             failed_count += 1
             await callback.message.answer(
-                f"⚠️ Концепт {index}/5 — <b>{_e(name)}</b>\nНе удалось создать макет.",
+                f"⚠️ Концепт {index}/5 — <b>{_e(name)}</b>\nНе удалось создать карточку.",
                 parse_mode="HTML",
             )
 
@@ -290,23 +298,18 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
 
     if generated_count > 0:
         summary = (
-            f"✅ <b>Готово!</b> Создано {generated_count} из {len(concepts)} макетов.\n\n"
-            "Сохрани понравившиеся — они готовы к передаче дизайнеру "
-            "или использованию на маркетплейсе."
+            f"✅ <b>Готово!</b> Создано {generated_count} из {len(concepts)} карточек.\n\n"
+            "Сохрани понравившиеся — готовы к передаче дизайнеру или использованию на маркетплейсе."
         )
         if failed_count > 0:
-            summary += f"\n\n⚠️ {failed_count} макетов не удалось создать."
+            summary += f"\n\n⚠️ {failed_count} карточек не удалось создать."
     else:
-        summary = "😔 Не удалось создать ни одного макета. Попробуй начать заново через /start."
+        summary = "😔 Не удалось создать ни одной карточки. Попробуй начать заново через /start."
 
     log_event(user.id, user.username, "visual_concepts_done", {
-        "generated": generated_count,
-        "failed":    failed_count,
-        "total":     len(concepts),
+        "generated": generated_count, "failed": failed_count, "total": len(concepts),
     })
 
     await callback.message.answer(
-        summary,
-        parse_mode   = "HTML",
-        reply_markup = after_visuals_keyboard(),
+        summary, parse_mode="HTML", reply_markup=after_visuals_keyboard(),
     )
