@@ -13,7 +13,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery
 
 from keyboards import after_design_keyboard, after_visuals_keyboard
 from logger_setup import log_error, log_event
-from services.card_renderer import render_card
+from services.card_renderer import overlay_text_on_image, render_card
 from services.openai_image import build_image_prompt, generate_card_image
 from services.openrouter import generate_design_concepts
 from states import Dialog
@@ -224,7 +224,7 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
 
         image_bytes = None
 
-        # ── Primary: OpenAI gpt-image-1 ────────────────────────────────────────
+        # ── Primary: OpenAI gpt-image-1 → Pillow text overlay ─────────────────
         if use_openai:
             prompt = build_image_prompt(
                 concept     = concept,
@@ -233,15 +233,27 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
                 marketplace = marketplace,
                 category    = category,
             )
-            image_bytes = await generate_card_image(
+            ai_visual = await generate_card_image(
                 user_id       = user.id,
                 username      = user.username,
                 prompt        = prompt,
                 photo_bytes   = photo_bytes,
                 concept_index = index,
             )
+            if ai_visual is not None:
+                # Overlay accurate text on the AI-generated visual
+                try:
+                    image_bytes = overlay_text_on_image(
+                        base_bytes = ai_visual,
+                        title      = title,
+                        features   = features,
+                        colors_str = colors,
+                    )
+                except Exception as exc:
+                    log_error(user.id, user.username, f"overlay_{index}", str(exc))
+                    image_bytes = ai_visual  # send without overlay if it fails
 
-        # ── Fallback: Pillow renderer ───────────────────────────────────────────
+        # ── Fallback: full Pillow renderer ─────────────────────────────────────
         if image_bytes is None:
             try:
                 image_bytes = render_card(

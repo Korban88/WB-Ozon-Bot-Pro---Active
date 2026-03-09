@@ -1,10 +1,12 @@
 """
-Marketplace card image generation via OpenAI gpt-image-1.
+Marketplace card visual generation via OpenAI gpt-image-1.
+
+Generates VISUAL ONLY (no text) — text is overlaid by card_renderer.overlay_text_on_image().
 
 Uses /v1/images/edits endpoint:
-  - takes the original product photo as input image
-  - applies the TZ concept (colors, typography, composition)
-  - generates a professional marketplace card with Russian text
+  - takes original product photo as input
+  - applies TZ concept style (colors, background, lighting, composition)
+  - returns PNG bytes of the styled visual
 
 Falls back gracefully if OPENAI_API_KEY is not set (returns None → Pillow fallback).
 """
@@ -28,15 +30,18 @@ def build_image_prompt(
     marketplace: str,
     category: str,
 ) -> str:
-    """Build the image generation prompt from TZ concept data."""
+    """
+    Build a VISUAL-ONLY prompt for gpt-image-1.
+    Text is NOT requested here — it will be overlaid separately by Pillow.
+    """
     _mp  = {"wb": "Wildberries", "ozon": "Ozon"}
     _cat = {
-        "clothing":    "Одежда",
-        "electronics": "Электроника",
-        "home":        "Дом и интерьер",
-        "beauty":      "Красота и уход",
-        "accessories": "Аксессуары",
-        "other":       "Другое",
+        "clothing":    "одежда",
+        "electronics": "электроника",
+        "home":        "товары для дома",
+        "beauty":      "красота и уход",
+        "accessories": "аксессуары",
+        "other":       "товары",
     }
     mp_name  = _mp.get(marketplace,  marketplace)
     cat_name = _cat.get(category, category)
@@ -46,32 +51,24 @@ def build_image_prompt(
     typography  = concept.get("typography",  "")
     composition = concept.get("composition", "")
 
-    # Up to 3 clean feature bullets
-    bullets = []
-    for f in features[:3]:
-        import re
-        clean = re.sub(r'^[✅•▸✓➤→\-\s]+', '', f).strip()
-        if clean:
-            bullets.append(clean)
-    bullets_text = "\n".join(f"• {b}" for b in bullets)
-
     return (
-        f"Создай карточку товара для маркетплейса {mp_name}, категория «{cat_name}».\n"
-        f"Стиль карточки: «{name}»\n\n"
-        f"ФОТО ТОВАРА (прилагается): Это фото реального товара. "
-        f"Размести его в центре карточки как главный визуал (hero shot). "
-        f"Товар должен выглядеть как на оригинальном фото — не изменяй его.\n\n"
-        f"ЦВЕТА: {colors}\n"
-        f"ТИПОГРАФИКА: {typography}\n"
-        f"КОМПОЗИЦИЯ: {composition}\n\n"
-        f"ТЕКСТ НА КАРТОЧКЕ (на русском языке):\n"
-        f"Заголовок: {title}\n"
-        f"Преимущества:\n{bullets_text}\n\n"
-        f"ТРЕБОВАНИЯ:\n"
-        f"• Формат 1:1 (1000×1000px)\n"
-        f"• Весь текст читается на мобильном\n"
-        f"• Safe zone 8–10% от краёв\n"
-        f"• Стиль топ-карточек {mp_name} в категории «{cat_name}»"
+        f"Create a professional marketplace product card visual for {mp_name}, "
+        f"category: {cat_name}.\n"
+        f"Design style: «{name}»\n\n"
+        f"PRODUCT: Use the attached photo of the product as the hero element. "
+        f"Place it prominently in the upper-center area. "
+        f"Keep the product appearance exactly as in the photo — do not alter the product itself.\n\n"
+        f"COLOR SCHEME: {colors}\n"
+        f"VISUAL STYLE & ATMOSPHERE: {composition}\n\n"
+        f"CRITICAL RULES:\n"
+        f"- Do NOT add any text, letters, numbers, or writing anywhere on the image\n"
+        f"- Do NOT add logos or watermarks\n"
+        f"- Leave the bottom 35% of the image darker and relatively uncluttered "
+        f"(text will be added there separately)\n"
+        f"- Focus on: background style, lighting, atmosphere, product placement, "
+        f"decorative elements matching the concept\n\n"
+        f"Quality: professional commercial photography, {mp_name} top-seller card style, "
+        f"high-end product photography, studio lighting, sharp details."
     )
 
 
@@ -83,10 +80,8 @@ async def generate_card_image(
     concept_index: int = 0,
 ) -> bytes | None:
     """
-    Generate a marketplace card image using OpenAI gpt-image-1.
-
-    Takes the product photo + TZ prompt, returns PNG bytes.
-    Returns None if OPENAI_API_KEY is not set or on any error.
+    Generate a styled product card visual using OpenAI gpt-image-1.
+    Returns PNG bytes (visual only, no text). Returns None on failure.
     """
     if not config.OPENAI_API_KEY:
         log.warning("OPENAI_API_KEY not set — skipping OpenAI image generation")
@@ -132,7 +127,7 @@ async def generate_card_image(
 
         elapsed = int((time.monotonic() - start) * 1000)
         log_ai_call(user_id, username, service, success=True, duration_ms=elapsed)
-        log.info("OpenAI image generated for concept %d (%dms)", concept_index, elapsed)
+        log.info("OpenAI visual generated for concept %d (%dms)", concept_index, elapsed)
         return image_bytes
 
     except Exception as exc:
