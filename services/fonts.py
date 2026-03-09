@@ -12,7 +12,7 @@ from logger_setup import log
 FONTS_DIR = Path(__file__).parent.parent / "assets" / "fonts"
 
 _MONTSERRAT_BASE = (
-    "https://github.com/google/fonts/raw/main/ofl/montserrat/static/"
+    "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/"
 )
 _REQUIRED = {
     "Montserrat-Bold.ttf":     _MONTSERRAT_BASE + "Montserrat-Bold.ttf",
