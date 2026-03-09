@@ -14,7 +14,7 @@ OPENROUTER_URL: str = "https://openrouter.ai/api/v1/chat/completions"
 # ── OpenAI (image generation via gpt-image-1) ─────────────────────────────────
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_IMAGE_MODEL: str = "gpt-image-1"
-OPENAI_IMAGE_URL: str = "https://api.openai.com/v1/images/edits"
+OPENAI_IMAGE_URL: str = "https://api.openai.com/v1/images/generations"
 
 # ── Together AI (legacy, not used) ────────────────────────────────────────────
 TOGETHER_API_KEY: str = os.getenv("TOGETHER_API_KEY", "")

@@ -22,6 +22,7 @@ from services.card_renderer import render_card
 from services.card_types import get_card_types, TYPE_LABELS_RU
 from services.scene_gen import generate_scene
 from services.openrouter import generate_design_concepts
+from services.color_extractor import extract_dominant_colors, get_color_description
 from states import Dialog
 from utils.images import send_step_image
 
@@ -201,17 +202,27 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
 
     use_openai = bool(_cfg.OPENAI_API_KEY)
 
+    # ── Extract product colors ONCE (scenes and typography use product palette) ──
+    try:
+        dominant_colors = extract_dominant_colors(photo_bytes, n_colors=3)
+        color_mood = get_color_description(dominant_colors)
+    except Exception:
+        color_mood = "neutral"
+    log_event(user.id, user.username, "colors_extracted", {"color_mood": color_mood})
+
     progress_msg = await send_step_image(
         callback.message,
         step="generating",
         caption=(
             "⏳ <b>Генерирую карточки...</b>\n\n"
             + (
-                "🎨 gpt-image-1 создаёт сцену с товаром\n"
-                "✏️ Pillow накладывает типографику\n\n"
+                f"🎨 Цвета из продукта: <i>{_e(color_mood)}</i>\n"
+                "🖼 Сцена генерируется без продукта\n"
+                "✂️ Продукт вырезается и вставляется слоем\n"
+                "✏️ Типографика — Pillow\n\n"
                 "5 карточек · обычно 30–60 сек каждая."
                 if use_openai else
-                "🎨 Pillow-рендер (OpenAI ключ не задан)"
+                f"🎨 Pillow-рендер · цвета из продукта: <i>{_e(color_mood)}</i>"
             )
         ),
     )
@@ -219,32 +230,31 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
     await state.set_state(Dialog.visual_concepts)
 
     features        = card.get("features", []) if card else []
+    subtitle        = card.get("subtitle", "")  if card else ""
     card_types      = get_card_types(category)
     generated_count = 0
     failed_count    = 0
 
     for concept, card_type in zip(concepts, card_types):
-        index     = concept.get("index",  1)
-        name      = concept.get("name",   "Концепт")
-        colors    = concept.get("colors", "#FFFFFF · #1A237E · #FFD700")
+        index      = concept.get("index", 1)
+        name       = concept.get("name",  "Концепт")
         type_label = TYPE_LABELS_RU.get(card_type, card_type)
         image_bytes = None
 
-        # ── AI scene (skipped for 'features' type — uses Pillow background) ───
+        # ── Scene: EMPTY BACKGROUND only, product is NEVER sent to OpenAI ────
         scene_bytes = None
         if use_openai:
             scene_bytes = await generate_scene(
-                concept       = concept,
-                product_bytes = photo_bytes,
-                marketplace   = marketplace,
-                category      = category,
+                card_type     = card_type,
+                color_mood    = color_mood,
                 user_id       = user.id,
                 username      = user.username,
                 concept_index = index,
-                card_type     = card_type,
+                marketplace   = marketplace,
+                category      = category,
             )
 
-        # ── Render card with type-specific layout ─────────────────────────────
+        # ── Render: product cutout composited onto scene, Pillow typography ───
         try:
             image_bytes = render_card(
                 card_type     = card_type,
@@ -252,7 +262,8 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
                 product_bytes = photo_bytes,
                 title         = title,
                 features      = features,
-                colors_str    = colors,
+                colors_str    = "",
+                subtitle      = subtitle,
             )
         except Exception as exc:
             log_error(user.id, user.username, f"render_{card_type}_{index}", str(exc))
@@ -263,7 +274,7 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
                 await callback.message.answer_photo(
                     photo      = BufferedInputFile(image_bytes, filename=f"card_{index}.png"),
                     caption    = (f"<b>{_e(type_label)} — {_e(name)}</b>\n"
-                                  f"<code>{_e(colors)}</code>"),
+                                  f"<i>Цвета из продукта · {_e(color_mood)}</i>"),
                     parse_mode = "HTML",
                 )
                 generated_count += 1
