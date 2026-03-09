@@ -200,8 +200,8 @@ async def msg_upload_photo(message: Message, state: FSMContext) -> None:
         await _send_error(message, state)
         return
 
-    # Save card to state
-    await state.update_data(card=card)
+    # Save card and original photo bytes to state (needed for card rendering)
+    await state.update_data(card=card, photo_bytes=photo_bytes)
     await state.set_state(Dialog.show_card)
 
     # Delete "generating" message, show result

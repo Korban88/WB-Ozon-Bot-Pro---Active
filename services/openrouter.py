@@ -135,28 +135,33 @@ async def generate_card(
 
 # ── Design concepts generation ────────────────────────────────────────────────
 DESIGN_SYSTEM_PROMPT = """Ты — арт-директор и дизайнер карточек товаров для маркетплейсов.
-Создаёшь концепции дизайна, которые выделяют товар среди конкурентов и увеличивают CTR.
-Ответ СТРОГО в формате JSON."""
+Создаёшь детальные ТЗ (технические задания) для дизайна карточек товаров.
+Для каждого концепта указывай точные hex-коды цветов, шрифты с размерами и детальное описание композиции.
+Ответ СТРОГО в формате JSON без комментариев и без markdown-обёртки."""
 
-DESIGN_USER_PROMPT = """Создай 5 уникальных дизайн-концептов для карточки товара.
+DESIGN_USER_PROMPT = """Создай 5 уникальных дизайн-концептов (ТЗ для дизайнера) для карточки товара.
 
 Товар: {title}
 Маркетплейс: {marketplace}
 Категория: {category}
 
-Для каждого концепта создай:
-1. Яркое название стиля
-2. Текстовое описание (как будет выглядеть карточка: цвета, стиль, настроение, 2-3 предложения)
-3. Детальный prompt для AI-генерации изображения на АНГЛИЙСКОМ языке (для FLUX)
+Для каждого концепта укажи:
+1. Название стиля (ёмко и ярко, например «Минимализм Premium» или «Контраст Dark»)
+2. Цветовую палитру — ровно 3 цвета с hex-кодами: фон, основной текст/заголовок, акцент
+3. Типографику — шрифт, размеры в px, цвета для заголовка и подписей
+4. Композицию — фон карточки, расположение товара, структура блоков (2-3 предложения)
+
+Стили должны быть разными: например минимализм, тёмный контраст, яркий поп, природный/эко, премиум-люкс.
 
 Верни ТОЛЬКО JSON (без markdown-обёртки):
 {{
   "concepts": [
     {{
       "index": 1,
-      "name": "Название стиля",
-      "description": "Описание визуального стиля карточки (2-3 предложения на русском)",
-      "image_prompt": "Detailed English prompt for FLUX image generation: product on [background], [style], [colors], [composition], marketplace product card, high quality, commercial photography"
+      "name": "Минимализм Premium",
+      "colors": "Белый #FFFFFF · Тёмно-синий #1A237E · Акцент золотой #FFD700",
+      "typography": "Заголовок: Montserrat Bold 72px, цвет #1A237E\\nПодписи: Medium 28px, цвет #333333\\nАкценты: #FFD700",
+      "composition": "Центральная ось, симметрия, товар hero по центру 70% площади. Фон: студийный белый с мягкими тенями. Три буллета с преимуществами снизу на белом фоне, типографика Montserrat Bold."
     }},
     ... (5 концептов)
   ]
@@ -171,8 +176,8 @@ async def generate_design_concepts(
     marketplace: str,
 ) -> list[dict[str, Any]]:
     """
-    Generate 5 text design concepts.
-    Returns list of concept dicts: [{index, name, description, image_prompt}, ...]
+    Generate 5 detailed design concept TZ (technical specs).
+    Returns list of concept dicts: [{index, name, colors, typography, composition}, ...]
     """
     marketplace_name = MARKETPLACE_NAMES.get(marketplace, marketplace)
     category_name    = CATEGORY_NAMES.get(category, category)
