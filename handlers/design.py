@@ -18,9 +18,9 @@ from aiogram.types import BufferedInputFile, CallbackQuery
 
 from keyboards import after_design_keyboard, after_visuals_keyboard
 from logger_setup import log_error, log_event
-from services.background_gen import generate_background, pillow_gradient_background
-from services.card_composer import compose_card
-from services.card_renderer import render_card_pillow
+from services.background_gen import pillow_gradient_background
+from services.card_renderer import overlay_text_premium, render_card_pillow
+from services.scene_gen import generate_scene
 from services.openrouter import generate_design_concepts
 from states import Dialog
 from utils.images import send_step_image
@@ -205,15 +205,13 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
         callback.message,
         step="generating",
         caption=(
-            "⏳ <b>Генерирую карточки по 3-слойному pipeline...</b>\n\n"
+            "⏳ <b>Генерирую карточки...</b>\n\n"
             + (
-                "🤖 <b>Слой 1:</b> gpt-image-1 → стильный фон\n"
-                "✂️ <b>Слой 2:</b> rembg → вырезаю товар + тень\n"
-                "✏️ <b>Слой 3:</b> Pillow → текст карточки\n\n"
-                "Обычно 40–90 сек на карточку."
+                "🤖 gpt-image-1 интегрирует товар в сцену\n"
+                "✏️ Pillow накладывает текст\n\n"
+                f"5 карточек · обычно 30–60 сек каждая."
                 if use_openai else
-                "🎨 <b>Pillow-рендер</b> (OpenAI ключ не задан)\n"
-                "Обычно 5–10 секунд."
+                "🎨 Pillow-рендер (OpenAI ключ не задан)"
             )
         ),
     )
@@ -231,44 +229,31 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
 
         image_bytes = None
 
-        # ── 3-layer pipeline (OpenAI + rembg + Pillow) ─────────────────────────
+        # ── Primary: scene (product integrated) + premium text ────────────────
         if use_openai:
-            # Layer 1: generate background
-            bg_bytes = await generate_background(
+            scene_bytes = await generate_scene(
                 concept       = concept,
+                product_bytes = photo_bytes,
                 marketplace   = marketplace,
                 category      = category,
                 user_id       = user.id,
                 username      = user.username,
                 concept_index = index,
             )
+            if scene_bytes:
+                try:
+                    image_bytes = overlay_text_premium(
+                        scene_bytes, title, features, colors
+                    )
+                except Exception as exc:
+                    log_error(user.id, user.username, f"overlay_{index}", str(exc))
+                    image_bytes = scene_bytes  # send without text if overlay fails
 
-            if bg_bytes is None:
-                bg_bytes = pillow_gradient_background(colors)
-
-            # Layers 2 + 3: product cutout + text overlay
-            try:
-                image_bytes = compose_card(
-                    background_bytes = bg_bytes,
-                    product_bytes    = photo_bytes,
-                    title            = title,
-                    features         = features,
-                    colors_str       = colors,
-                )
-            except Exception as exc:
-                log_error(user.id, user.username, f"compose_{index}", str(exc))
-
-        # ── Fallback: Pillow-only ──────────────────────────────────────────────
+        # ── Fallback: Pillow gradient + product + text ─────────────────────────
         if image_bytes is None:
             try:
                 bg_bytes    = pillow_gradient_background(colors)
-                image_bytes = render_card_pillow(
-                    background_bytes = bg_bytes,
-                    product_bytes    = photo_bytes,
-                    title            = title,
-                    features         = features,
-                    colors_str       = colors,
-                )
+                image_bytes = render_card_pillow(bg_bytes, photo_bytes, title, features, colors)
             except Exception as exc:
                 log_error(user.id, user.username, f"pillow_render_{index}", str(exc))
 

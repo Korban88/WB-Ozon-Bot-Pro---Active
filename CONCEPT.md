@@ -77,29 +77,24 @@ CONCEPT.md              # этот файл — контекст проекта
 
 ---
 
-## Генерация визуальных карточек (3-layer pipeline)
+## Генерация визуальных карточек (текущий pipeline)
 
-### Layer 1 — Фон (`services/background_gen.py`)
-- `generate_background()` → OpenAI `/v1/images/generations` с `gpt-image-1`
-- Промт: **только пустая стильная сцена** (без товара, без текста)
-- Центр оставляется свободным под товар, низ затемнён под текст
-- Fallback: `pillow_gradient_background()` — градиент из цветов концепта
+### Step 1 — Сцена с товаром (`services/scene_gen.py`)
+- `generate_scene()` → OpenAI `/v1/images/edits` с `gpt-image-1`
+- Передаёт реальное фото товара → модель интегрирует товар в стильную сцену
+- Единое освещение, товар — часть композиции (не стикер на фоне)
+- Промт: NO TEXT, NO FRAMES, product as hero, unified lighting
 
-### Layer 2 — Товар (`services/card_composer.py`)
-- `_cut_background()` → rembg удаляет фон товара → RGBA-изображение
-- `_add_drop_shadow()` → GaussianBlur-тень за товаром
-- `_soft_frame()` → если rembg недоступен — белая рамка за фото
-- Товар центрируется в верхних 62% карточки
-- Если rembg недоступен — fallback на белую рамку
-
-### Layer 3 — Текст (`services/card_renderer.py`)
-- `overlay_text_on_image()` → полупрозрачная панель (нижние 38%)
-- Accent-полоса, заголовок (до 2 строк, Bold), тонкий разделитель, 3 буллета ✦
-- Drop-shadow на тексте, масштабирование к размеру изображения
-- Цвета из `colors_str` концепта
+### Step 2 — Текст (`services/card_renderer.py`)
+- `overlay_text_premium()` → gradient fade снизу 26% (не тяжёлая плашка)
+- Ease-in кривая прозрачности → плавный, не заметный переход
+- Заголовок: Bold 40px + text-shadow, до 2 строк
+- 3 буллета: `•` в accent-цвете + текст regular 22px
+- Нет рамок, нет accent-стрип, нет разделителей
 
 ### Fallback (если нет OPENAI_API_KEY)
-- `render_card_pillow()` — Pillow: градиентный фон + продукт в белой рамке + текст
+- `pillow_gradient_background()` → градиент из цветов концепта
+- `render_card_pillow()` → продукт без белой рамки (soft ellipse shadow) + gradient text
 
 ---
 

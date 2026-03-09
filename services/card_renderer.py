@@ -1,8 +1,12 @@
 """
-Text overlay renderer using Pillow.
+Card renderer: text overlay and Pillow-only fallback.
 
-overlay_text_on_image(): adds a professional text panel onto any image.
-render_card_pillow():     full Pillow-only card (no AI) for fallback / offline mode.
+overlay_text_premium():
+    Adds a gradient fade + clean text to an AI-generated scene.
+    NO heavy panel, NO frames, NO accent stripes — just typography on a gradient.
+
+render_card_pillow():
+    Full Pillow card for offline/no-API mode.
 """
 
 import io
@@ -11,7 +15,6 @@ import textwrap
 
 from PIL import Image, ImageDraw, ImageFont
 
-# Font search paths: Ubuntu → Windows dev fallback
 _BOLD_FONTS = [
     "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -29,122 +32,126 @@ _REG_FONTS = [
 ]
 
 
-def _load_font(paths: list[str], size: int) -> ImageFont.ImageFont:
-    for path in paths:
+def _load_font(paths, size):
+    for p in paths:
         try:
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(p, size)
         except (OSError, IOError):
             continue
     return ImageFont.load_default()
 
 
-def _parse_colors(colors_str: str) -> list[tuple[int, int, int]]:
-    hexes = re.findall(r'#([0-9A-Fa-f]{6})', colors_str)
+def _parse_colors(s):
+    hexes = re.findall(r'#([0-9A-Fa-f]{6})', s)
     return [tuple(int(h[i:i+2], 16) for i in (0, 2, 4)) for h in hexes[:3]]
 
 
-def _luminance(rgb: tuple) -> float:
-    return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+def _lum(c):
+    return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
 
 
-def _contrasting(rgb: tuple) -> tuple:
-    return (255, 255, 255) if _luminance(rgb) < 145 else (12, 12, 12)
+def _contrast(c):
+    return (255, 255, 255) if _lum(c) < 145 else (10, 10, 10)
 
 
-def _darken(rgb: tuple, factor: float = 0.55) -> tuple:
-    return tuple(max(0, int(c * factor)) for c in rgb)
-
-
-def _shadow_text(draw, xy, text, fill, font, shadow_color, offset=2):
-    """Draw text with drop shadow."""
-    draw.text((xy[0] + offset, xy[1] + offset), text, fill=shadow_color, font=font)
-    draw.text(xy, text, fill=fill, font=font)
-
-
-def _clean_feat(feat: str) -> str:
+def _clean(feat):
     return re.sub(r'^[✅•▸✓➤→✦\-\s]+', '', feat).strip()
 
 
+def _draw_text_shadow(draw, xy, text, fill, font, shadow_opacity=130, offset=2):
+    """Draw text with a soft shadow for readability on any background."""
+    # Shadow: black with low opacity
+    shadow_fill = (0, 0, 0)
+    # We can't use alpha on RGB image directly, so draw shadow color
+    # For dark text on light bg, skip shadow; for light text on dark bg, use shadow
+    if fill[0] > 180:  # light text → draw dark shadow
+        draw.text((xy[0] + offset, xy[1] + offset), text, fill=(0, 0, 0), font=font)
+        draw.text((xy[0] + offset, xy[1]), text, fill=(0, 0, 0), font=font)
+    else:              # dark text → very subtle light shadow
+        draw.text((xy[0] + 1, xy[1] + 1), text,
+                  fill=(255, 255, 255), font=font)
+    draw.text(xy, text, fill=fill, font=font)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-def overlay_text_on_image(
+def overlay_text_premium(
     base_bytes: bytes,
     title:      str,
     features:   list[str],
     colors_str: str,
 ) -> bytes:
     """
-    Add a professional text panel onto a composed background+product image.
+    Elegant text overlay — no heavy panel, no frames, no accent stripes.
 
-    Layout (bottom 38%):
-      [accent stripe 5px]
-      [Title — bold, up to 2 lines]
-      [thin accent rule]
-      [✦ Feature 1]
-      [✦ Feature 2]
-      [✦ Feature 3]
-
-    Returns PNG bytes.
+    Design:
+    • Gradient fade at the bottom 26% (smooth, no hard edge)
+    • Title: bold, large, with text shadow
+    • 3 feature lines: clean, regular, minimal bullets
+    • Accent color used ONLY for feature bullets — not for background elements
     """
     parsed       = _parse_colors(colors_str)
-    panel_color  = parsed[1] if len(parsed) > 1 else (20, 20, 40)
-    accent_color = parsed[2] if len(parsed) > 2 else (220, 160, 40)
-    text_color   = _contrasting(panel_color)
-    shadow_color = _darken(panel_color, 0.4) if _luminance(panel_color) > 60 else (0, 0, 0)
+    fade_color   = parsed[1] if len(parsed) > 1 else (15, 15, 25)
+    accent_color = parsed[2] if len(parsed) > 2 else (210, 160, 40)
+    text_color   = _contrast(fade_color)
 
     base = Image.open(io.BytesIO(base_bytes)).convert("RGBA")
     w, h = base.size
 
-    panel_h = int(h * 0.38)
-    panel_y = h - panel_h
+    # ── Gradient fade (bottom 26%) ────────────────────────────────────────────
+    fade_h    = int(h * 0.26)
+    fade_y    = h - fade_h
+    overlay   = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    fade_draw = ImageDraw.Draw(overlay)
 
-    # ── Semi-transparent panel ───────────────────────────────────────────────
-    overlay    = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    panel_draw = ImageDraw.Draw(overlay)
-
-    # Slightly lighter top strip → full panel color below (faux gradient)
-    r, g, b = panel_color
-    lighter = (min(r + 35, 255), min(g + 35, 255), min(b + 35, 255))
-    panel_draw.rectangle([0, panel_y,     w, panel_y + 8], fill=(*lighter,     200))
-    panel_draw.rectangle([0, panel_y + 8, w, h],           fill=(*panel_color, 228))
+    r, g, b = fade_color
+    for dy in range(fade_h):
+        # Ease-in curve: slow start, fast end → more natural fade
+        t     = dy / fade_h
+        alpha = int((t ** 1.6) * 215)
+        fade_draw.line([(0, fade_y + dy), (w, fade_y + dy)], fill=(r, g, b, alpha))
 
     base = Image.alpha_composite(base, overlay).convert("RGB")
     draw = ImageDraw.Draw(base)
 
-    # ── Accent top stripe ────────────────────────────────────────────────────
-    draw.rectangle([0, panel_y, w, panel_y + 5], fill=accent_color)
+    # ── Fonts ──────────────────────────────────────────────────────────────────
+    scale  = w / 1000
+    f_h1   = _load_font(_BOLD_FONTS, int(40 * scale))   # title
+    f_feat = _load_font(_REG_FONTS,  int(22 * scale))   # features
+    f_dot  = _load_font(_BOLD_FONTS, int(22 * scale))   # bullet
 
-    # ── Fonts (scale to image size) ──────────────────────────────────────────
-    scale      = w / 1000
-    f_title    = _load_font(_BOLD_FONTS, int(36 * scale))
-    f_feat     = _load_font(_REG_FONTS,  int(23 * scale))
-    f_bullet   = _load_font(_BOLD_FONTS, int(23 * scale))
+    pad = int(38 * scale)
+    y   = fade_y + int(14 * scale)
 
-    pad   = int(36 * scale)
-    y     = panel_y + int(18 * scale)
+    # ── Title ──────────────────────────────────────────────────────────────────
+    title_clean = title.strip()[:80]
+    lines = textwrap.wrap(title_clean, width=28)[:2]
+    for line in lines:
+        _draw_text_shadow(draw, (pad, y), line, fill=text_color, font=f_h1)
+        y += int(50 * scale)
 
-    # ── Title (≤ 2 lines) ─────────────────────────────────────────────────────
-    for line in textwrap.wrap(title.strip()[:80], width=30)[:2]:
-        _shadow_text(draw, (pad, y), line,
-                     fill=text_color, font=f_title, shadow_color=shadow_color,
-                     offset=int(2 * scale))
-        y += int(47 * scale)
+    y += int(6 * scale)
 
-    y += int(8 * scale)
+    # ── Features ──────────────────────────────────────────────────────────────
+    # Slightly transparent version of text_color for features
+    feat_color = (
+        min(text_color[0] + 30, 255),
+        min(text_color[1] + 30, 255),
+        min(text_color[2] + 30, 255),
+    ) if text_color == (10, 10, 10) else (
+        max(text_color[0] - 30, 0),
+        max(text_color[1] - 30, 0),
+        max(text_color[2] - 30, 0),
+    )
 
-    # ── Thin accent rule ─────────────────────────────────────────────────────
-    draw.rectangle([pad, y, w - pad, y + 2], fill=accent_color)
-    y += int(13 * scale)
-
-    # ── Features ─────────────────────────────────────────────────────────────
     for feat in features[:3]:
-        clean = _clean_feat(feat)[:60]
+        clean = _clean(feat)[:60]
         if not clean:
             continue
-        _shadow_text(draw, (pad, y), "✦",
-                     fill=accent_color, font=f_bullet, shadow_color=shadow_color, offset=1)
-        _shadow_text(draw, (pad + int(30 * scale), y), clean,
-                     fill=text_color, font=f_feat, shadow_color=shadow_color, offset=1)
-        y += int(38 * scale)
+        # Accent bullet
+        _draw_text_shadow(draw, (pad, y), "•", fill=accent_color, font=f_dot)
+        _draw_text_shadow(draw, (pad + int(22 * scale), y), clean,
+                          fill=feat_color, font=f_feat)
+        y += int(34 * scale)
 
     buf = io.BytesIO()
     base.save(buf, "PNG", optimize=True)
@@ -160,41 +167,48 @@ def render_card_pillow(
     colors_str:       str,
 ) -> bytes:
     """
-    Full Pillow-only card: background + product (white frame) + text overlay.
-    Used when card_composer is unavailable (rembg not installed, no OpenAI).
+    Pillow-only fallback card: background + product (clean frame) + gradient text.
+    Used when OpenAI API is not available.
     """
     parsed      = _parse_colors(colors_str)
-    bg_color    = parsed[0] if parsed          else (245, 245, 250)
     accent      = parsed[2] if len(parsed) > 2 else (200, 150, 50)
 
-    CARD_W, CARD_H = 1000, 1000
-    PHOTO_ZONE_H   = int(CARD_H * 0.62)
+    W, H = 1000, 1000
+    ZONE = int(H * 0.72)  # product occupies top 72%
 
-    bg  = Image.open(io.BytesIO(background_bytes)).convert("RGB").resize((CARD_W, CARD_H))
+    bg   = Image.open(io.BytesIO(background_bytes)).convert("RGB").resize((W, H))
     draw = ImageDraw.Draw(bg)
 
-    # Product with white rounded frame
+    # Product with minimal soft frame (not the old heavy white rectangle)
     try:
-        MAX_W, MAX_H = int(CARD_W * 0.72), int(PHOTO_ZONE_H * 0.88)
-        product = Image.open(io.BytesIO(product_bytes)).convert("RGBA")
-        product.thumbnail((MAX_W, MAX_H), Image.LANCZOS)
+        MAX_W, MAX_H = int(W * 0.70), int(ZONE * 0.85)
+        prod = Image.open(io.BytesIO(product_bytes)).convert("RGBA")
+        prod.thumbnail((MAX_W, MAX_H), Image.LANCZOS)
 
-        px = (CARD_W - product.width)  // 2
-        py = max(20, (PHOTO_ZONE_H - product.height) // 2 - 10)
+        px = (W - prod.width)  // 2
+        py = max(20, (ZONE - prod.height) // 2 - 20)
 
-        pad = 14
-        draw.rounded_rectangle(
-            [px - pad, py - pad, px + product.width + pad, py + product.height + pad],
-            radius=10, fill=(255, 255, 255, 230),
+        # Subtle soft shadow only — no white rectangle
+        shadow_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        s_draw = ImageDraw.Draw(shadow_layer)
+        s_draw.ellipse(
+            [px + 20, py + prod.height - 20,
+             px + prod.width - 20, py + prod.height + 30],
+            fill=(0, 0, 0, 60)
         )
-        white_bg = Image.new("RGB", product.size, (255, 255, 255))
-        white_bg.paste(product, mask=product.split()[3])
+        from PIL import ImageFilter
+        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(18))
+        bg_rgba = bg.convert("RGBA")
+        bg_rgba = Image.alpha_composite(bg_rgba, shadow_layer)
+        bg = bg_rgba.convert("RGB")
+
+        # Paste product directly on background (no white frame)
+        white_bg = Image.new("RGB", prod.size, (255, 255, 255))
+        white_bg.paste(prod, mask=prod.split()[3])
         bg.paste(white_bg, (px, py))
     except Exception:
         pass
 
     buf = io.BytesIO()
     bg.save(buf, "PNG")
-    composed = buf.getvalue()
-
-    return overlay_text_on_image(composed, title, features, colors_str)
+    return overlay_text_premium(buf.getvalue(), title, features, colors_str)
