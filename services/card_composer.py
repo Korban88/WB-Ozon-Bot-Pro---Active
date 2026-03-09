@@ -21,14 +21,9 @@ from PIL import Image, ImageFilter
 from logger_setup import log
 from services.card_renderer import overlay_text_on_image
 
-# ── rembg: background removal ─────────────────────────────────────────────────
-try:
-    from rembg import remove as _rembg_remove
-    REMBG_AVAILABLE = True
-    log.info("rembg available — product background removal enabled")
-except ImportError:
-    REMBG_AVAILABLE = False
-    log.warning("rembg not installed — using original product photo without cutout")
+# rembg disabled: requires ~176MB RAM model load which kills low-memory VPS.
+# Product is placed with a styled white frame instead.
+REMBG_AVAILABLE = False
 
 CARD_W = 1000
 CARD_H = 1000
@@ -41,18 +36,8 @@ _MAX_PRODUCT_H    = int(_PRODUCT_ZONE_H * 0.88)             # 545px
 
 
 def _cut_background(photo_bytes: bytes) -> Image.Image | None:
-    """
-    Remove product background using rembg.
-    Returns RGBA Image with transparent background, or None if unavailable/failed.
-    """
-    if not REMBG_AVAILABLE:
-        return None
-    try:
-        out = _rembg_remove(photo_bytes)
-        return Image.open(io.BytesIO(out)).convert("RGBA")
-    except Exception as exc:
-        log.warning("rembg background removal failed: %s", exc)
-        return None
+    """Background removal via rembg — disabled (too heavy for VPS RAM)."""
+    return None
 
 
 def _add_drop_shadow(

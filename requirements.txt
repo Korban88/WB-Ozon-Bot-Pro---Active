@@ -2,5 +2,6 @@ aiogram==3.13.0
 aiohttp==3.10.10
 python-dotenv==1.0.1
 Pillow>=10.0.0
-rembg>=2.0.50
-onnxruntime>=1.16.0
+# rembg disabled — requires 176MB model which kills low-memory VPS
+# rembg>=2.0.50
+# onnxruntime>=1.16.0
