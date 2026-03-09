@@ -12,6 +12,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery
 from keyboards import after_design_keyboard, after_visuals_keyboard
 from logger_setup import log_error, log_event
 from services.card_renderer import render_card
+from services.openai_image import build_image_prompt, generate_card_image
 from services.openrouter import generate_design_concepts
 from states import Dialog
 from utils.images import send_step_image
@@ -169,19 +170,23 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
         )
         return
 
+    import config as _cfg
+    use_openai = bool(_cfg.OPENAI_API_KEY)
+
     progress_msg = await send_step_image(
         callback.message,
         step="generating",
         caption=(
-            "⏳ <b>Рендерю визуальные макеты карточек...</b>\n\n"
-            f"Вставляю фото товара в 5 концептов для <b>{title}</b>.\n"
-            "Обычно занимает 10–20 секунд."
+            "⏳ <b>Генерирую визуальные макеты карточек...</b>\n\n"
+            f"{'🤖 OpenAI gpt-image-1' if use_openai else '🎨 Pillow-рендер'} · "
+            f"5 концептов для <b>{title}</b>.\n"
+            f"{'Обычно 30–60 секунд.' if use_openai else 'Обычно 5–10 секунд.'}"
         ),
     )
 
     await state.set_state(Dialog.visual_concepts)
 
-    features       = card.get("features", []) if card else []
+    features        = card.get("features", []) if card else []
     generated_count = 0
     failed_count    = 0
 
@@ -190,21 +195,49 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
         name   = concept.get("name",   "Концепт")
         colors = concept.get("colors", "#FFFFFF · #1A237E · #FFD700")
 
-        try:
-            image_bytes = render_card(
-                photo_bytes = photo_bytes,
+        image_bytes = None
+
+        # ── Primary: OpenAI gpt-image-1 ────────────────────────────────────────
+        if use_openai:
+            prompt = build_image_prompt(
+                concept     = concept,
                 title       = title,
                 features    = features,
-                colors_str  = colors,
+                marketplace = marketplace,
+                category    = category,
             )
-            await callback.message.answer_photo(
-                photo   = BufferedInputFile(image_bytes, filename=f"card_concept_{index}.png"),
-                caption = f"<b>Концепт {index}/5 — {name}</b>\n{colors}",
-                parse_mode = "HTML",
+            image_bytes = await generate_card_image(
+                user_id       = user.id,
+                username      = user.username,
+                prompt        = prompt,
+                photo_bytes   = photo_bytes,
+                concept_index = index,
             )
-            generated_count += 1
-        except Exception as exc:
-            log_error(user.id, user.username, f"render_card_{index}", str(exc))
+
+        # ── Fallback: Pillow renderer ───────────────────────────────────────────
+        if image_bytes is None:
+            try:
+                image_bytes = render_card(
+                    photo_bytes = photo_bytes,
+                    title       = title,
+                    features    = features,
+                    colors_str  = colors,
+                )
+            except Exception as exc:
+                log_error(user.id, user.username, f"render_card_{index}", str(exc))
+
+        if image_bytes:
+            try:
+                await callback.message.answer_photo(
+                    photo      = BufferedInputFile(image_bytes, filename=f"card_concept_{index}.png"),
+                    caption    = f"<b>Концепт {index}/5 — {name}</b>\n{colors}",
+                    parse_mode = "HTML",
+                )
+                generated_count += 1
+            except Exception as exc:
+                log_error(user.id, user.username, f"send_card_{index}", str(exc))
+                failed_count += 1
+        else:
             failed_count += 1
             await callback.message.answer(
                 f"⚠️ Концепт {index}/5 — <b>{name}</b>\nНе удалось создать макет.",

@@ -11,7 +11,12 @@ OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 OPENROUTER_URL: str = "https://openrouter.ai/api/v1/chat/completions"
 
-# ── Together AI (image generation) ────────────────────────────────────────────
+# ── OpenAI (image generation via gpt-image-1) ─────────────────────────────────
+OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+OPENAI_IMAGE_MODEL: str = "gpt-image-1"
+OPENAI_IMAGE_URL: str = "https://api.openai.com/v1/images/edits"
+
+# ── Together AI (legacy, not used) ────────────────────────────────────────────
 TOGETHER_API_KEY: str = os.getenv("TOGETHER_API_KEY", "")
 TOGETHER_MODEL: str = "black-forest-labs/FLUX.1-schnell-Free"
 TOGETHER_URL: str = "https://api.together.xyz/v1/images/generations"
