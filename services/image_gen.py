@@ -1,18 +1,23 @@
 """
-Image generation service via Together AI (FLUX.1-schnell-Free).
+Image generation service via Pollinations.ai (free, no API key required).
 
-Falls back gracefully if no API key is set or if the API call fails —
-in that case returns None and the bot skips that image.
+Pollinations generates images on-demand by GET request to a URL.
+Falls back gracefully if the API call fails — returns None and the bot skips that image.
 """
 
 import time
+import urllib.parse
 
 import aiohttp
 
-import config
 from logger_setup import log, log_ai_call
 
 TIMEOUT_SECONDS = 90
+
+
+def _build_url(prompt: str) -> str:
+    encoded = urllib.parse.quote(prompt)
+    return f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
 
 
 async def generate_image(
@@ -22,45 +27,29 @@ async def generate_image(
     concept_index: int = 0,
 ) -> str | None:
     """
-    Generate one image via Together AI.
+    Generate one image via Pollinations.ai (free, no API key needed).
 
-    Args:
-        prompt: English image prompt for FLUX
-        concept_index: for logging (1-5)
-
-    Returns:
-        Public image URL string, or None if generation failed.
+    Returns the image URL (generation happens on first GET), or None on failure.
     """
-    if not config.TOGETHER_API_KEY:
-        log.warning("TOGETHER_API_KEY not set — skipping image generation")
-        return None
-
-    headers = {
-        "Authorization": f"Bearer {config.TOGETHER_API_KEY}",
-        "Content-Type":  "application/json",
-    }
-    payload = {
-        "model":  config.TOGETHER_MODEL,
-        "prompt": prompt,
-        "n":      1,
-        "width":  1024,
-        "height": 1024,
-    }
+    url = _build_url(prompt)
 
     start = time.monotonic()
-    service_name = f"together_ai/concept_{concept_index}"
+    service_name = f"pollinations/concept_{concept_index}"
     try:
         timeout = aiohttp.ClientTimeout(total=TIMEOUT_SECONDS)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(config.TOGETHER_URL, headers=headers, json=payload) as resp:
+            async with session.get(url, allow_redirects=True) as resp:
                 if resp.status != 200:
                     body = await resp.text()
-                    raise RuntimeError(f"Together AI HTTP {resp.status}: {body[:300]}")
-                data = await resp.json()
+                    raise RuntimeError(f"Pollinations HTTP {resp.status}: {body[:200]}")
+                image_bytes = await resp.read()
 
-        url = data["data"][0]["url"]
         elapsed = int((time.monotonic() - start) * 1000)
         log_ai_call(user_id, username, service_name, success=True, duration_ms=elapsed)
+
+        # Return bytes directly wrapped in a sentinel so caller can send without re-downloading
+        # We store bytes in a module-level cache keyed by url
+        _image_cache[url] = image_bytes
         return url
 
     except Exception as exc:
@@ -71,13 +60,18 @@ async def generate_image(
         return None
 
 
+# Simple in-memory cache so download_image doesn't re-fetch already downloaded bytes
+_image_cache: dict[str, bytes] = {}
+
+
 async def download_image(url: str) -> bytes | None:
     """
-    Download image bytes from a URL.
-    Returns bytes or None on failure.
-    Telegram can sometimes not reach external CDNs, so we download
-    the image ourselves and send it as binary data.
+    Return image bytes. Uses cache if already downloaded during generate_image.
+    Falls back to HTTP GET if not cached.
     """
+    if url in _image_cache:
+        return _image_cache.pop(url)
+
     try:
         timeout = aiohttp.ClientTimeout(total=TIMEOUT_SECONDS)
         async with aiohttp.ClientSession(timeout=timeout) as session:
