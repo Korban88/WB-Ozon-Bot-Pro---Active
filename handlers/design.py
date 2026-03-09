@@ -18,8 +18,8 @@ from aiogram.types import BufferedInputFile, CallbackQuery
 
 from keyboards import after_design_keyboard, after_visuals_keyboard
 from logger_setup import log_error, log_event
-from services.background_gen import pillow_gradient_background
-from services.card_renderer import overlay_text_concept, render_card_pillow
+from services.card_renderer import render_card
+from services.card_types import get_card_types, TYPE_LABELS_RU
 from services.scene_gen import generate_scene
 from services.openrouter import generate_design_concepts
 from states import Dialog
@@ -219,16 +219,19 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
     await state.set_state(Dialog.visual_concepts)
 
     features        = card.get("features", []) if card else []
+    card_types      = get_card_types(category)
     generated_count = 0
     failed_count    = 0
 
-    for concept in concepts:
-        index  = concept.get("index",  1)
-        name   = concept.get("name",   "Концепт")
-        colors = concept.get("colors", "#FFFFFF · #1A237E · #FFD700")
+    for concept, card_type in zip(concepts, card_types):
+        index     = concept.get("index",  1)
+        name      = concept.get("name",   "Концепт")
+        colors    = concept.get("colors", "#FFFFFF · #1A237E · #FFD700")
+        type_label = TYPE_LABELS_RU.get(card_type, card_type)
         image_bytes = None
 
-        # ── Primary: concept-specific scene (product integrated) + text ───────
+        # ── AI scene (skipped for 'features' type — uses Pillow background) ───
+        scene_bytes = None
         if use_openai:
             scene_bytes = await generate_scene(
                 concept       = concept,
@@ -238,34 +241,29 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
                 user_id       = user.id,
                 username      = user.username,
                 concept_index = index,
+                card_type     = card_type,
             )
-            if scene_bytes:
-                try:
-                    image_bytes = overlay_text_concept(
-                        scene_bytes, title, features, colors, index,
-                        concept=concept, category=category,
-                    )
-                except Exception as exc:
-                    log_error(user.id, user.username, f"overlay_{index}", str(exc))
-                    image_bytes = scene_bytes
 
-        # ── Fallback: Pillow gradient background + product + text ─────────────
-        if image_bytes is None:
-            try:
-                bg          = pillow_gradient_background(colors)
-                image_bytes = render_card_pillow(
-                    bg, photo_bytes, title, features, colors,
-                    concept_index=index, concept=concept, category=category,
-                )
-            except Exception as exc:
-                log_error(user.id, user.username, f"pillow_render_{index}", str(exc))
+        # ── Render card with type-specific layout ─────────────────────────────
+        try:
+            image_bytes = render_card(
+                card_type     = card_type,
+                scene_bytes   = scene_bytes,
+                product_bytes = photo_bytes,
+                title         = title,
+                features      = features,
+                colors_str    = colors,
+            )
+        except Exception as exc:
+            log_error(user.id, user.username, f"render_{card_type}_{index}", str(exc))
 
         # ── Send result ────────────────────────────────────────────────────────
         if image_bytes:
             try:
                 await callback.message.answer_photo(
                     photo      = BufferedInputFile(image_bytes, filename=f"card_{index}.png"),
-                    caption    = f"<b>Концепт {index}/5 — {_e(name)}</b>\n<code>{_e(colors)}</code>",
+                    caption    = (f"<b>{_e(type_label)} — {_e(name)}</b>\n"
+                                  f"<code>{_e(colors)}</code>"),
                     parse_mode = "HTML",
                 )
                 generated_count += 1
