@@ -2,8 +2,10 @@
 Design concepts handler.
 
 Step 7: Generate & display 5 detailed text design TZ (technical specs).
-Step 8: Render 5 card mockup images using Pillow (product photo + text + concept colors).
+Step 8: Render 5 card mockup images using OpenAI gpt-image-1 (Pillow fallback).
 """
+
+import html
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -29,17 +31,18 @@ _CATEGORY = {
     "other":       "Другое",
 }
 
-_CONTENT_BLOCKS = (
-    "📋 Контент-блоки карточки\n"
-    "▸ Зона 1: главный визуал товара (hero shot)\n"
-    "▸ Зона 2: SEO-заголовок / оффер\n"
-    "▸ Зона 3: 3–5 буллетов с ключевыми выгодами\n"
-    "▸ Зона 4: USP-строка или призыв к действию"
-)
+# Эмодзи-номера для концептов
+_INDEX_EMOJI = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣"}
+
+
+def _e(text: str) -> str:
+    """Escape HTML special characters in dynamic content."""
+    return html.escape(str(text))
 
 
 def _format_concept(concept: dict, title: str, marketplace: str, category: str) -> str:
-    index       = concept.get("index",       "?")
+    """Format one TZ concept as a styled HTML message."""
+    index       = concept.get("index",       1)
     name        = concept.get("name",        "Концепт")
     colors      = concept.get("colors",      "—")
     typography  = concept.get("typography",  "—")
@@ -47,21 +50,38 @@ def _format_concept(concept: dict, title: str, marketplace: str, category: str) 
 
     mp  = _MARKETPLACE.get(marketplace, marketplace)
     cat = _CATEGORY.get(category, category)
+    num = _INDEX_EMOJI.get(index, f"{index}.")
+
+    # Typography may contain \n — split into lines for italic formatting
+    typo_lines = _e(typography).replace("\\n", "\n").split("\n")
+    typo_html  = "\n".join(f"<i>{line.strip()}</i>" for line in typo_lines if line.strip())
 
     return (
-        f"КОНЦЕПТ {index}/5 — «{name}»\n"
+        f"{num} <b>КОНЦЕПТ {index}/5 — «{_e(name)}»</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Товар: {title}\n"
-        f"Маркетплейс: {mp} · Категория: {cat}\n\n"
-        f"🎨 Цветовая палитра\n{colors}\n\n"
-        f"🔤 Типографика\n{typography}\n\n"
-        f"🧩 Композиция\n{composition}\n\n"
-        f"{_CONTENT_BLOCKS}\n\n"
-        f"📐 Технические требования\n"
-        f"▸ Формат: 1:1 (1000×1000px) или 3:4 (700×900px)\n"
+        f"<b>Товар:</b> {_e(title)}\n"
+        f"<b>Маркетплейс:</b> {_e(mp)} · <b>Категория:</b> {_e(cat)}\n"
+        f"\n"
+        f"🎨 <b>Цветовая палитра</b>\n"
+        f"<code>{_e(colors)}</code>\n"
+        f"\n"
+        f"🔤 <b>Типографика</b>\n"
+        f"{typo_html}\n"
+        f"\n"
+        f"🧩 <b>Композиция</b>\n"
+        f"{_e(composition)}\n"
+        f"\n"
+        f"📋 <b>Контент-блоки карточки</b>\n"
+        f"▸ Зона 1: главный визуал товара <i>(hero shot)</i>\n"
+        f"▸ Зона 2: SEO-заголовок / оффер\n"
+        f"▸ Зона 3: 3–5 буллетов с ключевыми выгодами\n"
+        f"▸ Зона 4: USP-строка или призыв к действию\n"
+        f"\n"
+        f"📐 <b>Технические требования</b>\n"
+        f"▸ Формат: <code>1:1 (1000×1000px)</code> или <code>3:4 (700×900px)</code>\n"
         f"▸ Safe zone: 8–10% от краёв\n"
         f"▸ Текст читается на мобильном с первого взгляда\n"
-        f"▸ Паттерн топ-карточек {mp} в категории «{cat}»"
+        f"▸ Паттерн топ-карточек {_e(mp)} в категории «{_e(cat)}»"
     )
 
 
@@ -78,7 +98,6 @@ async def cb_design_concepts(callback: CallbackQuery, state: FSMContext) -> None
     category    = data.get("category",    "other")
     marketplace = data.get("marketplace", "wb")
 
-    # Progress message
     progress_msg = await send_step_image(
         callback.message,
         step="design_concepts",
@@ -125,9 +144,15 @@ async def cb_design_concepts(callback: CallbackQuery, state: FSMContext) -> None
 
     await state.update_data(concepts=concepts)
 
+    await callback.message.answer(
+        "✅ <b>5 дизайн-концептов готовы!</b>\n"
+        "Ниже — детальное ТЗ для каждого стиля 👇",
+        parse_mode="HTML",
+    )
+
     for concept in concepts:
         text = _format_concept(concept, title, marketplace, category)
-        await callback.message.answer(text)  # plain text — hex codes safe without HTML
+        await callback.message.answer(text, parse_mode="HTML")
 
     log_event(user.id, user.username, "design_concepts_shown", {"count": len(concepts)})
 
@@ -154,6 +179,8 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
     data        = await state.get_data()
     concepts    = data.get("concepts",    [])
     title       = data.get("title",       "Товар")
+    category    = data.get("category",    "other")    # ← FIX: was missing
+    marketplace = data.get("marketplace", "wb")       # ← FIX: was missing
     card        = data.get("card",        {})
     photo_bytes = data.get("photo_bytes", None)
 
@@ -179,8 +206,8 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
         caption=(
             "⏳ <b>Генерирую визуальные макеты карточек...</b>\n\n"
             f"{'🤖 OpenAI gpt-image-1' if use_openai else '🎨 Pillow-рендер'} · "
-            f"5 концептов для <b>{title}</b>.\n"
-            f"{'Обычно 30–60 секунд.' if use_openai else 'Обычно 5–10 секунд.'}"
+            f"5 концептов для <b>{_e(title)}</b>.\n"
+            f"{'Обычно 30–90 секунд.' if use_openai else 'Обычно 5–10 секунд.'}"
         ),
     )
 
@@ -230,7 +257,7 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
             try:
                 await callback.message.answer_photo(
                     photo      = BufferedInputFile(image_bytes, filename=f"card_concept_{index}.png"),
-                    caption    = f"<b>Концепт {index}/5 — {name}</b>\n{colors}",
+                    caption    = f"<b>Концепт {index}/5 — {_e(name)}</b>\n<code>{_e(colors)}</code>",
                     parse_mode = "HTML",
                 )
                 generated_count += 1
@@ -240,7 +267,7 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
         else:
             failed_count += 1
             await callback.message.answer(
-                f"⚠️ Концепт {index}/5 — <b>{name}</b>\nНе удалось создать макет.",
+                f"⚠️ Концепт {index}/5 — <b>{_e(name)}</b>\nНе удалось создать макет.",
                 parse_mode="HTML",
             )
 
@@ -252,12 +279,13 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
     if generated_count > 0:
         summary = (
             f"✅ <b>Готово!</b> Создано {generated_count} из {len(concepts)} макетов.\n\n"
-            "Сохрани понравившиеся — они готовы к передаче дизайнеру или использованию на маркетплейсе."
+            "Сохрани понравившиеся — они готовы к передаче дизайнеру "
+            "или использованию на маркетплейсе."
         )
         if failed_count > 0:
             summary += f"\n\n⚠️ {failed_count} макетов не удалось создать."
     else:
-        summary = "😔 Не удалось создать ни одного макета. Попробуй начать заново."
+        summary = "😔 Не удалось создать ни одного макета. Попробуй начать заново через /start."
 
     log_event(user.id, user.username, "visual_concepts_done", {
         "generated": generated_count,
@@ -267,6 +295,6 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
 
     await callback.message.answer(
         summary,
-        parse_mode  = "HTML",
+        parse_mode   = "HTML",
         reply_markup = after_visuals_keyboard(),
     )
