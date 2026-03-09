@@ -54,11 +54,10 @@ async def generate_scene(
 
     try:
         payload = {
-            "model":           config.OPENAI_IMAGE_MODEL,
-            "prompt":          prompt,
-            "n":               1,
-            "size":            _SCENE_SIZE,
-            "response_format": "b64_json",
+            "model":  config.OPENAI_IMAGE_MODEL,
+            "prompt": prompt,
+            "n":      1,
+            "size":   _SCENE_SIZE,
         }
         headers = {
             "Authorization": f"Bearer {config.OPENAI_API_KEY}",
