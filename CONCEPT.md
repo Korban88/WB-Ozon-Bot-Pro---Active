@@ -79,22 +79,26 @@ CONCEPT.md              # этот файл — контекст проекта
 
 ## Генерация визуальных карточек (текущий pipeline)
 
-### Step 1 — Сцена с товаром (`services/scene_gen.py`)
-- `generate_scene()` → OpenAI `/v1/images/edits` с `gpt-image-1`
-- Передаёт реальное фото товара → модель интегрирует товар в стильную сцену
-- Единое освещение, товар — часть композиции (не стикер на фоне)
-- Промт: NO TEXT, NO FRAMES, product as hero, unified lighting
+### Step 1 — Фон (`services/background_gen.py`)
+- `generate_background()` → OpenAI `/v1/images/generations` с `gpt-image-1`
+- Генерирует ПУСТОЙ стильный фон — без товара, без текста
+- Центр 60% чистый — туда встанет товар
+- Промт: атмосфера концепта, цвета, NO product, NO text, luxury background
 
-### Step 2 — Текст (`services/card_renderer.py`)
-- `overlay_text_premium()` → gradient fade снизу 26% (не тяжёлая плашка)
-- Ease-in кривая прозрачности → плавный, не заметный переход
-- Заголовок: Bold 40px + text-shadow, до 2 строк
-- 3 буллета: `•` в accent-цвете + текст regular 22px
-- Нет рамок, нет accent-стрип, нет разделителей
+### Step 2 — Компоновка + Типографика (`services/card_layout.py`)
+- 5 layout presets: `LuxuryDark`, `EditorialSplit`, `HeroCenter`, `PremiumAsymmetric`, `MinimalClean`
+- Каждый layout: `render(bg_bytes, product_bytes, title, features, colors_str) → bytes`
+- Товар вставляется Pillow (soft ellipse shadow, без rembg)
+- Шрифт Montserrat (Bold/SemiBold/Regular) из `services/fonts.py`
+- Текст полностью вынесен из AI-генерации — 100% точный
+
+### Montserrat fonts (`services/fonts.py`)
+- `ensure_fonts()` → скачивает 4 варианта из Google Fonts при старте бота
+- `get_font(variant, size)` → загружает шрифт с fallback на системные
 
 ### Fallback (если нет OPENAI_API_KEY)
 - `pillow_gradient_background()` → градиент из цветов концепта
-- `render_card_pillow()` → продукт без белой рамки (soft ellipse shadow) + gradient text
+- Layout preset отрабатывает с Pillow-фоном так же
 
 ---
 
@@ -153,6 +157,7 @@ python bot.py
 
 - ✅ Основной диалог работает (шаги 1–6, генерация карточки)
 - ✅ Текстовые концепты работают (детальный формат ТЗ с hex-цветами)
-- ✅ 3-layer pipeline внедрён (background_gen + card_composer + card_renderer)
-- ⏳ Тестирование нового pipeline на сервере (rembg первый запуск = ~170MB)
-- 🎯 Цель: визуальные карточки уровня professional marketplace design
+- ✅ Новый pipeline: background_gen (/generations) + card_layout (5 presets) + Montserrat
+- ✅ rembg отключён навсегда (OOM на VPS) — используется soft ellipse shadow
+- ✅ Montserrat скачивается автоматически при первом запуске (assets/fonts/)
+- 🎯 Деплой: git pull + python bot.py

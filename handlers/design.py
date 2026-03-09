@@ -18,9 +18,8 @@ from aiogram.types import BufferedInputFile, CallbackQuery
 
 from keyboards import after_design_keyboard, after_visuals_keyboard
 from logger_setup import log_error, log_event
-from services.background_gen import pillow_gradient_background
-from services.card_renderer import overlay_text_premium, render_card_pillow
-from services.scene_gen import generate_scene
+from services.background_gen import generate_background, pillow_gradient_background
+from services.card_layout import get_layout
 from services.openrouter import generate_design_concepts
 from states import Dialog
 from utils.images import send_step_image
@@ -207,9 +206,9 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
         caption=(
             "⏳ <b>Генерирую карточки...</b>\n\n"
             + (
-                "🤖 gpt-image-1 интегрирует товар в сцену\n"
-                "✏️ Pillow накладывает текст\n\n"
-                f"5 карточек · обычно 30–60 сек каждая."
+                "🎨 gpt-image-1 генерирует фон\n"
+                "🖼 Pillow вставляет товар и текст\n\n"
+                "5 карточек · обычно 20–40 сек каждая."
                 if use_openai else
                 "🎨 Pillow-рендер (OpenAI ключ не задан)"
             )
@@ -226,36 +225,31 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
         index  = concept.get("index",  1)
         name   = concept.get("name",   "Концепт")
         colors = concept.get("colors", "#FFFFFF · #1A237E · #FFD700")
+        layout = get_layout(index)
 
         image_bytes = None
 
-        # ── Primary: scene (product integrated) + premium text ────────────────
+        # ── Step 1: AI background (empty styled scene, no product) ────────────
+        bg = None
         if use_openai:
-            scene_bytes = await generate_scene(
+            bg = await generate_background(
                 concept       = concept,
-                product_bytes = photo_bytes,
                 marketplace   = marketplace,
                 category      = category,
                 user_id       = user.id,
                 username      = user.username,
                 concept_index = index,
             )
-            if scene_bytes:
-                try:
-                    image_bytes = overlay_text_premium(
-                        scene_bytes, title, features, colors
-                    )
-                except Exception as exc:
-                    log_error(user.id, user.username, f"overlay_{index}", str(exc))
-                    image_bytes = scene_bytes  # send without text if overlay fails
 
-        # ── Fallback: Pillow gradient + product + text ─────────────────────────
-        if image_bytes is None:
-            try:
-                bg_bytes    = pillow_gradient_background(colors)
-                image_bytes = render_card_pillow(bg_bytes, photo_bytes, title, features, colors)
-            except Exception as exc:
-                log_error(user.id, user.username, f"pillow_render_{index}", str(exc))
+        # ── Fallback background: Pillow gradient ──────────────────────────────
+        if bg is None:
+            bg = pillow_gradient_background(colors)
+
+        # ── Step 2: layout preset renders product + typography ────────────────
+        try:
+            image_bytes = layout.render(bg, photo_bytes, title, features, colors)
+        except Exception as exc:
+            log_error(user.id, user.username, f"layout_render_{index}", str(exc))
 
         # ── Send result ────────────────────────────────────────────────────────
         if image_bytes:

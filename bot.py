@@ -18,6 +18,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 import config
 from handlers import design, dialog, start
 from logger_setup import log
+from services.fonts import ensure_fonts
 
 
 async def main() -> None:
@@ -46,6 +47,7 @@ async def main() -> None:
     dp.include_router(design.router)  # design & visual concepts
 
     log.info("Bot starting...")
+    ensure_fonts()   # download Montserrat if not cached
     log.info("Model: %s", config.OPENROUTER_MODEL)
     log.info("Together AI: %s", "enabled" if config.TOGETHER_API_KEY else "disabled (no API key)")
 
