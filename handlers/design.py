@@ -242,7 +242,8 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
             if scene_bytes:
                 try:
                     image_bytes = overlay_text_concept(
-                        scene_bytes, title, features, colors, index
+                        scene_bytes, title, features, colors, index,
+                        concept=concept, category=category,
                     )
                 except Exception as exc:
                     log_error(user.id, user.username, f"overlay_{index}", str(exc))
@@ -253,7 +254,8 @@ async def cb_visual_concepts(callback: CallbackQuery, state: FSMContext) -> None
             try:
                 bg          = pillow_gradient_background(colors)
                 image_bytes = render_card_pillow(
-                    bg, photo_bytes, title, features, colors, concept_index=index
+                    bg, photo_bytes, title, features, colors,
+                    concept_index=index, concept=concept, category=category,
                 )
             except Exception as exc:
                 log_error(user.id, user.username, f"pillow_render_{index}", str(exc))

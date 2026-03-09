@@ -56,10 +56,10 @@ def _brief_luxury_dark(mp, cat, colors, name, composition) -> str:
         f"it has atmospheric depth, subtle texture, a sense of expensive space. "
         f"Color temperature: cool to neutral. Moodboard: deep luxury, concentrated light, premium material.\n\n"
 
-        f"COMPOSITION: Product positioned in upper center, occupying approximately 55–65% of frame height. "
-        f"Elevated slightly — either on an implied surface or floating in space. "
-        f"Generous negative space on both sides. "
-        f"The lower 30% of the image fades to near-black — this area must stay completely clean and dark.\n\n"
+        f"COMPOSITION: Product as the absolute focal point, upper-center of the frame. "
+        f"Occupying approximately 55–65% of frame height. "
+        f"Elevated slightly — on an implied surface or floating in dramatic space. "
+        f"Generous negative space on both sides. Fill the entire frame with the atmospheric scene.\n\n"
 
         f"PRODUCT REQUIREMENT: Render the product EXACTLY as it appears in the uploaded photo. "
         f"Do not alter, idealize, or redesign the product in any way. "
@@ -91,10 +91,9 @@ def _brief_editorial(mp, cat, colors, name, composition) -> str:
         f"The background should feel designed, not neutral.\n\n"
 
         f"COMPOSITION: Strong and asymmetric. The product is positioned with intention — "
-        f"it may be off-center, may have generous negative space on one side. "
-        f"The composition should feel like an art director chose it, not a default centering. "
+        f"it may be off-center, may have generous negative space on one strong side. "
         f"Visual tension and resolution are present. "
-        f"Lower 28% of the image: noticeably darker, clean, empty.\n\n"
+        f"The composition should feel like an art director chose it. Fill the entire frame with scene.\n\n"
 
         f"PRODUCT REQUIREMENT: Render the product EXACTLY as it appears in the uploaded photo. "
         f"Only the environment, lighting, and staging are created by you. "
@@ -127,8 +126,8 @@ def _brief_lifestyle_hero(mp, cat, colors, name, composition) -> str:
 
         f"COMPOSITION: Product as a confident hero. "
         f"Upper-center position, large in frame — approximately 65% of frame height. "
-        f"Balanced, welcoming composition. "
-        f"Lower 28% of the image: smooth, clean, fading slightly darker — empty of all elements.\n\n"
+        f"Balanced, welcoming composition with lifestyle context. "
+        f"Fill the entire frame with the beautiful scene and its environment.\n\n"
 
         f"PRODUCT REQUIREMENT: Render the product EXACTLY as it appears in the uploaded photo. "
         f"Only the environment, lighting, and lifestyle context are created by you. "
@@ -162,7 +161,7 @@ def _brief_natural_artisan(mp, cat, colors, name, composition) -> str:
         f"COMPOSITION: Product nestled naturally in an artisan setting. "
         f"Supporting natural elements in soft focus around it — they add context without competing. "
         f"The product is clearly the hero but belongs to the scene. "
-        f"Lower 28% of the image: naturally darker, clear of clutter, calm.\n\n"
+        f"Fill the entire frame with the warm, natural world of the scene.\n\n"
 
         f"PRODUCT REQUIREMENT: Render the product EXACTLY as it appears in the uploaded photo. "
         f"Only the environment and natural styling around it are created by you.\n\n"
@@ -190,9 +189,9 @@ def _brief_minimal_pure(mp, cat, colors, name, composition) -> str:
         f"Nothing in the frame competes with the product. Silence is the statement.\n\n"
 
         f"COMPOSITION: Product perfectly centered, large, with extreme breathing room on all sides. "
-        f"Nothing else in the frame — no props, no context, no environmental elements. "
-        f"The product's own form and materials create all the visual interest. "
-        f"Lower 25% of the image: very clean, slightly lighter than center.\n\n"
+        f"Absolutely nothing else in the frame — no props, no context, no environmental elements. "
+        f"The product floats in pure, silent space. "
+        f"Fill the entire frame with this perfect emptiness and the product within it.\n\n"
 
         f"PRODUCT REQUIREMENT: Render the product EXACTLY as it appears in the uploaded photo. "
         f"Absolutely nothing else is added. The product floats in pure space.\n\n"
