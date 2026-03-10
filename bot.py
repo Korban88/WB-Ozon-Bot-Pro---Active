@@ -1,10 +1,7 @@
 """
-WB/Ozon Card Bot — entry point.
+WB/Ozon AI Studio — точка входа.
 
-Start:
-    python bot.py
-
-The bot runs in polling mode (no webhook needed for VPS).
+Регистрирует роутеры всех модулей и запускает polling.
 """
 
 import asyncio
@@ -16,44 +13,42 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import config
-from handlers import design, dialog, start
-from logger_setup import log
-from services.fonts import ensure_fonts
+from bot.menu        import router as menu_router
+from bot.analysis    import router as analysis_router
+from bot.visuals     import router as visuals_router
+from bot.infographic import router as infographic_router
+from bot.copy        import router as copy_router
+from bot.ugc         import router as ugc_router
+from logger_setup    import log
+from services.fonts  import ensure_fonts
 
 
 async def main() -> None:
-    # Validate required environment variables before starting
     try:
         config.validate()
     except EnvironmentError as exc:
         log.error("Configuration error: %s", exc)
         sys.exit(1)
 
-    # Create bot with HTML parse mode as default
     bot = Bot(
-        token=config.TELEGRAM_BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        token   = config.TELEGRAM_BOT_TOKEN,
+        default = DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    dp = Dispatcher(storage=MemoryStorage())
 
-    # MemoryStorage: dialog states are stored in RAM.
-    # Simple and reliable — no external dependencies.
-    # Note: states are lost on bot restart (users will need to /start again).
-    storage = MemoryStorage()
+    # Порядок важен: menu первым (обрабатывает /start и menu:main из любого состояния)
+    dp.include_router(menu_router)
+    dp.include_router(analysis_router)
+    dp.include_router(visuals_router)
+    dp.include_router(infographic_router)
+    dp.include_router(copy_router)
+    dp.include_router(ugc_router)
 
-    # Create dispatcher and register all routers
-    dp = Dispatcher(storage=storage)
-    dp.include_router(start.router)   # /start command
-    dp.include_router(dialog.router)  # main dialog flow
-    dp.include_router(design.router)  # design & visual concepts
+    ensure_fonts()
+    log.info("WB/Ozon AI Studio starting. Model: %s", config.OPENROUTER_MODEL)
+    log.info("OpenAI visuals: %s", "enabled" if config.OPENAI_API_KEY else "disabled (Pillow fallback)")
 
-    log.info("Bot starting...")
-    ensure_fonts()   # download Montserrat if not cached
-    log.info("Model: %s", config.OPENROUTER_MODEL)
-    log.info("Together AI: %s", "enabled" if config.TOGETHER_API_KEY else "disabled (no API key)")
-
-    # Drop any updates that arrived while bot was offline
     await bot.delete_webhook(drop_pending_updates=True)
-
     log.info("Bot is running. Press Ctrl+C to stop.")
 
     try:

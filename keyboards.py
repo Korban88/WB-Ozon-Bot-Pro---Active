@@ -1,14 +1,64 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
-def marketplace_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🟣 Wildberries", callback_data="marketplace:wb"),
-            InlineKeyboardButton(text="🔵 Ozon",        callback_data="marketplace:ozon"),
+def _kb(*rows: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Хелпер: список рядов [(text, callback_data), ...]"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=t, callback_data=c) for t, c in row]
+            for row in rows
         ]
-    ])
+    )
 
+
+def _back() -> list[tuple[str, str]]:
+    return [("↩️ Главное меню", "menu:main")]
+
+
+# ── Главное меню ──────────────────────────────────────────────────────────────
+
+def main_menu_keyboard() -> InlineKeyboardMarkup:
+    return _kb(
+        [("🔍 Анализ карточки",   "module:analysis")],
+        [("🖼 Создать визуалы",    "module:visuals")],
+        [("📊 Инфографика",        "module:infographic")],
+        [("📣 Рекламные тексты",   "module:copy")],
+        [("🎬 UGC сценарий",       "module:ugc")],
+    )
+
+
+# ── После анализа ─────────────────────────────────────────────────────────────
+
+def after_analysis_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки после анализа карточки. Данные уже в state — модули пропустят ввод."""
+    return _kb(
+        [("🖼 Создать визуалы",  "module:visuals"),  ("📣 Copy Pack",   "module:copy")],
+        [("📊 Инфографика",      "module:infographic"), ("🎬 UGC",      "module:ugc")],
+        _back(),
+    )
+
+
+# ── После визуалов ────────────────────────────────────────────────────────────
+
+def after_visuals_keyboard() -> InlineKeyboardMarkup:
+    return _kb(
+        [("📣 Copy Pack",     "module:copy"),   ("🎬 UGC сценарий", "module:ugc")],
+        [("📊 Инфографика",   "module:infographic")],
+        _back(),
+    )
+
+
+# ── После текстов / инфографики / UGC ─────────────────────────────────────────
+
+def after_copy_keyboard() -> InlineKeyboardMarkup:
+    return _kb(
+        [("🖼 Создать визуалы", "module:visuals")],
+        [("🔍 Новый анализ",    "module:analysis")],
+        _back(),
+    )
+
+
+# ── Категории ─────────────────────────────────────────────────────────────────
 
 CATEGORIES = [
     ("👗 Одежда",      "clothing"),
@@ -25,60 +75,8 @@ CATEGORY_NAMES = {code: name for name, code in CATEGORIES}
 def category_keyboard() -> InlineKeyboardMarkup:
     rows = []
     for i in range(0, len(CATEGORIES), 2):
-        row = [InlineKeyboardButton(
-            text=CATEGORIES[i][0],
-            callback_data=f"category:{CATEGORIES[i][1]}"
-        )]
+        row = [(CATEGORIES[i][0], f"category:{CATEGORIES[i][1]}")]
         if i + 1 < len(CATEGORIES):
-            row.append(InlineKeyboardButton(
-                text=CATEGORIES[i + 1][0],
-                callback_data=f"category:{CATEGORIES[i + 1][1]}"
-            ))
+            row.append((CATEGORIES[i + 1][0], f"category:{CATEGORIES[i + 1][1]}"))
         rows.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def after_card_keyboard() -> InlineKeyboardMarkup:
-    """Buttons shown after the product text card is ready."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="🖼 5 Premium Visuals",
-            callback_data="action:premium_visuals"
-        )],
-        [InlineKeyboardButton(
-            text="📣 Ad Copy Pack",
-            callback_data="action:ad_copy"
-        )],
-        [InlineKeyboardButton(
-            text="🔄 Новый товар",
-            callback_data="action:restart"
-        )],
-    ])
-
-
-def after_visuals_keyboard() -> InlineKeyboardMarkup:
-    """Buttons shown after 5 premium visuals are generated."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="📣 Ad Copy Pack",
-            callback_data="action:ad_copy"
-        )],
-        [InlineKeyboardButton(
-            text="🔄 Новый товар",
-            callback_data="action:restart"
-        )],
-    ])
-
-
-def after_ad_copy_keyboard() -> InlineKeyboardMarkup:
-    """Buttons shown after ad copy pack is generated."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="🖼 5 Premium Visuals",
-            callback_data="action:premium_visuals"
-        )],
-        [InlineKeyboardButton(
-            text="🔄 Новый товар",
-            callback_data="action:restart"
-        )],
-    ])
+    return _kb(*rows)
