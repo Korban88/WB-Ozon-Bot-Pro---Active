@@ -39,42 +39,46 @@ def category_keyboard() -> InlineKeyboardMarkup:
 
 
 def after_card_keyboard() -> InlineKeyboardMarkup:
-    """Buttons shown after the product card is ready."""
+    """Buttons shown after the product text card is ready."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🎨 Сгенерировать дизайн-концепты",
-            callback_data="action:design_concepts"
+            text="🖼 5 Premium Visuals",
+            callback_data="action:premium_visuals"
         )],
         [InlineKeyboardButton(
-            text="🔄 Сделать новую карточку",
-            callback_data="action:restart"
-        )],
-    ])
-
-
-def after_design_keyboard() -> InlineKeyboardMarkup:
-    """Buttons shown after text design concepts."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="🖼 Сгенерировать 5 визуальных концептов",
-            callback_data="action:visual_concepts"
+            text="📣 Ad Copy Pack",
+            callback_data="action:ad_copy"
         )],
         [InlineKeyboardButton(
-            text="🔄 Сделать новую карточку",
+            text="🔄 Новый товар",
             callback_data="action:restart"
         )],
     ])
 
 
 def after_visuals_keyboard() -> InlineKeyboardMarkup:
-    """Buttons shown after visual concepts."""
+    """Buttons shown after 5 premium visuals are generated."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🔄 Сделать новую карточку",
-            callback_data="action:restart"
+            text="📣 Ad Copy Pack",
+            callback_data="action:ad_copy"
         )],
         [InlineKeyboardButton(
-            text="✏️ Изменить описание",
-            callback_data="action:edit_benefits"
+            text="🔄 Новый товар",
+            callback_data="action:restart"
+        )],
+    ])
+
+
+def after_ad_copy_keyboard() -> InlineKeyboardMarkup:
+    """Buttons shown after ad copy pack is generated."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🖼 5 Premium Visuals",
+            callback_data="action:premium_visuals"
+        )],
+        [InlineKeyboardButton(
+            text="🔄 Новый товар",
+            callback_data="action:restart"
         )],
     ])

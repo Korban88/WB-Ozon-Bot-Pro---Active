@@ -27,6 +27,7 @@ from keyboards import (
     category_keyboard,
     marketplace_keyboard,
 )
+
 from logger_setup import log_error, log_event, log_step
 from services.openrouter import generate_card
 from states import Dialog
@@ -160,9 +161,9 @@ async def msg_upload_photo(message: Message, state: FSMContext) -> None:
         message,
         step="generating",
         caption=(
-            "⏳ <b>Генерирую карточку товара...</b>\n\n"
-            "Анализирую фото и описание, подбираю ключевые слова.\n"
-            "Обычно занимает 15-30 секунд."
+            "⏳ <b>Анализирую товар...</b>\n\n"
+            "Читаю фото, подбираю SEO-заголовок, описание и ключевые слова.\n"
+            "Обычно 15–30 секунд."
         ),
     )
 
@@ -258,15 +259,18 @@ async def _send_card(message: Message, card: dict) -> None:
     await send_step_image(
         message,
         step="card_ready",
-        caption="✅ <b>Карточка товара готова!</b>",
+        caption="✅ <b>Текст карточки готов!</b>",
     )
 
     # 2. Send full card as text message(s)
     for chunk in _split_text(card_text, TEXT_LIMIT):
         await message.answer(chunk, parse_mode="HTML")
 
-    # 3. Action buttons in a separate message
-    await message.answer("Что делаем дальше?", reply_markup=after_card_keyboard())
+    # 3. Action buttons
+    await message.answer(
+        "Текст готов. Теперь выбери что генерировать дальше:",
+        reply_markup=after_card_keyboard(),
+    )
 
 
 def _split_text(text: str, limit: int) -> list[str]:

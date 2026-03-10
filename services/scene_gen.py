@@ -44,10 +44,6 @@ async def generate_scene(
     if not config.OPENAI_API_KEY:
         return None
 
-    # Features card uses Pillow-only gradient — no AI needed
-    if card_type == "features":
-        return None
-
     prompt = build_scene_prompt(card_type, color_mood, marketplace, category)
     service = f"openai_scene/{card_type}_{concept_index}"
     start = time.monotonic()

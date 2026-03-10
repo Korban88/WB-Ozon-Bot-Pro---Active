@@ -208,6 +208,84 @@ async def generate_design_concepts(
         raise
 
 
+# ── Ad Copy Pack generation ───────────────────────────────────────────────────
+
+AD_COPY_SYSTEM_PROMPT = """Ты — топовый директ-реклама копирайтер для российского e-commerce (Wildberries, Ozon, VK Реклама, Telegram Ads).
+Пишешь короткие, мощные тексты, которые реально конвертируют.
+Знаешь психологию покупателя, триггеры, AIDA, PAS.
+Ответ СТРОГО в формате JSON без markdown-обёртки и без пояснений."""
+
+AD_COPY_USER_PROMPT = """Создай полный рекламный копипак для товара.
+
+Товар: {title}
+Маркетплейс: {marketplace}
+Категория: {category}
+Описание и преимущества: {benefits}
+
+Верни ТОЛЬКО JSON (без markdown-обёртки):
+{{
+  "hooks": [
+    "Хук 1 — 10-18 слов, проблема → решение",
+    "Хук 2 — любопытство или вопрос",
+    "Хук 3 — результат / трансформация",
+    "Хук 4 — социальное доказательство / цифра",
+    "Хук 5 — эмоциональный / lifestyle"
+  ],
+  "copy_short": [
+    "Вариант 1 — 1 предложение, 10-15 слов, для объявления",
+    "Вариант 2 — другой угол",
+    "Вариант 3 — ещё вариант"
+  ],
+  "copy_medium": [
+    "Вариант 1 — 2-3 предложения, для поста в Telegram/VK",
+    "Вариант 2 — другой подход"
+  ],
+  "ugc_brief": "Сценарий для UGC-видео 15-30 сек. Формат: Хук (0-3с): [текст]. Проблема (3-8с): [текст]. Продукт (8-20с): [текст]. CTA (20-30с): [текст]."
+}}"""
+
+
+async def generate_ad_copy(
+    user_id: int,
+    username: str | None,
+    title: str,
+    category: str,
+    marketplace: str,
+    benefits: str,
+) -> dict[str, Any]:
+    """
+    Generate ad copy pack: 5 hooks, 3 short copy, 2 medium copy, UGC brief.
+    Returns parsed JSON dict.
+    Raises RuntimeError on API failure.
+    """
+    marketplace_name = MARKETPLACE_NAMES.get(marketplace, marketplace)
+    category_name    = CATEGORY_NAMES.get(category, category)
+
+    messages = [
+        {"role": "system", "content": AD_COPY_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": AD_COPY_USER_PROMPT.format(
+                title=title,
+                marketplace=marketplace_name,
+                category=category_name,
+                benefits=benefits,
+            ),
+        },
+    ]
+
+    start = time.monotonic()
+    try:
+        result = await _call_openrouter(messages, json_mode=False)
+        elapsed = int((time.monotonic() - start) * 1000)
+        log_ai_call(user_id, username, "openrouter/ad_copy", success=True, duration_ms=elapsed)
+        return _parse_json_response(result)
+    except Exception as exc:
+        elapsed = int((time.monotonic() - start) * 1000)
+        log_ai_call(user_id, username, "openrouter/ad_copy", success=False,
+                    duration_ms=elapsed, error=str(exc))
+        raise
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 async def _call_openrouter(messages: list[dict], json_mode: bool = False) -> str:
     """Make a raw OpenRouter API call. Returns the assistant message content."""
