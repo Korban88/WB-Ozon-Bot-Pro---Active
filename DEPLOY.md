@@ -1,4 +1,4 @@
-# Деплой и запуск бота на VPS
+# Деплой и запуск бота на VPS (v3)
 
 Сервер: VPS Ubuntu
 Папка на сервере: `/root/wb-ozon-bot`
@@ -145,9 +145,9 @@ systemctl status wb-ozon-bot
 journalctl -u wb-ozon-bot -f
 ```
 
-**Лог диалогов (JSON):**
+**Лог событий (JSON):**
 ```bash
-tail -f /root/wb-ozon-bot/logs/dialog.log
+tail -f /root/wb-ozon-bot/logs/events.log
 ```
 
 **Остановить:**
