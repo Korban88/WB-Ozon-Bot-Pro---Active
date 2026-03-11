@@ -6,8 +6,10 @@ class Menu(StatesGroup):
 
 
 class Analysis(StatesGroup):
-    wait_url  = State()
-    analyzing = State()
+    wait_url           = State()
+    analyzing          = State()
+    wait_manual_title  = State()   # ручной ввод когда парсер не смог
+    wait_manual_desc   = State()   # ручной ввод описания/характеристик
 
 
 class Visuals(StatesGroup):

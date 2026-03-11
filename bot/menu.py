@@ -14,8 +14,13 @@ router = Router()
 
 _WELCOME = (
     "🤖 <b>WB/Ozon AI Studio</b>\n\n"
-    "AI-инструмент для роста продаж на маркетплейсах.\n\n"
-    "Выбери что нужно:"
+    "AI Creative Studio для продавцов на маркетплейсах.\n\n"
+    "🔍 <b>Аудит карточки</b> — оценка CTR-факторов и action plan\n"
+    "🖼 <b>Visual Pack</b> — 5 визуалов (Hero + Lifestyle + Ad Creative)\n"
+    "📊 <b>Инфографика</b> — полный blueprint для дизайнера\n"
+    "📣 <b>Copy Pack</b> — тексты карточки + рекламный пак\n"
+    "🎬 <b>UGC сценарий</b> — скрипт для короткого видео\n\n"
+    "Выбери с чего начать:"
 )
 
 
@@ -24,7 +29,7 @@ _WELCOME = (
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(Menu.main)
-    await message.answer(_WELCOME, reply_markup=main_menu_keyboard())
+    await message.answer(_WELCOME, reply_markup=main_menu_keyboard(), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "menu:main")
@@ -32,4 +37,4 @@ async def cb_menu_main(callback: CallbackQuery, state: FSMContext) -> None:
     """Кнопка «Главное меню» из любого модуля."""
     await callback.answer()
     await state.set_state(Menu.main)
-    await callback.message.answer(_WELCOME, reply_markup=main_menu_keyboard())
+    await callback.message.answer(_WELCOME, reply_markup=main_menu_keyboard(), parse_mode="HTML")

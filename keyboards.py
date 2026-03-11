@@ -19,10 +19,10 @@ def _back() -> list[tuple[str, str]]:
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
     return _kb(
-        [("🔍 Анализ карточки",   "module:analysis")],
-        [("🖼 Создать визуалы",    "module:visuals")],
+        [("🔍 Аудит карточки",    "module:analysis")],
+        [("🖼 Visual Pack",        "module:visuals")],
         [("📊 Инфографика",        "module:infographic")],
-        [("📣 Рекламные тексты",   "module:copy")],
+        [("📣 Copy Pack",          "module:copy")],
         [("🎬 UGC сценарий",       "module:ugc")],
     )
 
@@ -30,10 +30,20 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
 # ── После анализа ─────────────────────────────────────────────────────────────
 
 def after_analysis_keyboard() -> InlineKeyboardMarkup:
-    """Кнопки после анализа карточки. Данные уже в state — модули пропустят ввод."""
+    """Кнопки после анализа. Данные уже в state — модули пропустят ввод."""
     return _kb(
-        [("🖼 Создать визуалы",  "module:visuals"),  ("📣 Copy Pack",   "module:copy")],
-        [("📊 Инфографика",      "module:infographic"), ("🎬 UGC",      "module:ugc")],
+        [("🖼 Visual Pack",   "module:visuals"),  ("📣 Copy Pack",   "module:copy")],
+        [("📊 Инфографика",   "module:infographic"), ("🎬 UGC",      "module:ugc")],
+        _back(),
+    )
+
+
+# ── Анализ: ручной ввод когда парсер вернул пустую карточку ──────────────────
+
+def analysis_fallback_keyboard() -> InlineKeyboardMarkup:
+    """Предлагаем ручной ввод или выход в меню."""
+    return _kb(
+        [("✏️ Ввести данные вручную", "analysis:manual")],
         _back(),
     )
 
@@ -52,8 +62,8 @@ def after_visuals_keyboard() -> InlineKeyboardMarkup:
 
 def after_copy_keyboard() -> InlineKeyboardMarkup:
     return _kb(
-        [("🖼 Создать визуалы", "module:visuals")],
-        [("🔍 Новый анализ",    "module:analysis")],
+        [("🖼 Visual Pack",     "module:visuals")],
+        [("🔍 Новый аудит",     "module:analysis")],
         _back(),
     )
 
