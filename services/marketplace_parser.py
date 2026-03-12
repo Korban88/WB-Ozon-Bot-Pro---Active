@@ -1,13 +1,13 @@
 """
-Парсер карточек маркетплейсов v3.
+Парсер карточек маркетплейсов v4.
 
-Изменения v3:
-  - WB: исправлен regex (работает без trailing slash и с любым форматом URL)
-  - WB: разрешение редиректов перед парсингом
-  - WB: поддержка мобильных/коротких ссылок
+Изменения v4:
+  - WB: card.wb.ru/cards/v2 заменён на search.wb.ru (поиск по артикулу)
+  - WB: добавлен HTML scraping страницы как финальный fallback
+  - WB: убран _resolve_redirects (замедлял парсинг без пользы)
   - WB: функция получения топ конкурентов через search API
-  - Ozon: улучшенный парсинг, больше паттернов
-  - Подробное логирование причин ошибок
+  - Ozon: dual-strategy (JSON API + HTML scrape)
+  - Подробное логирование HTTP статусов для диагностики
 
 Правило: пустые поля — норма. Никогда не заполняем придуманными данными.
 """
@@ -23,12 +23,9 @@ from models.product_data import ProductData
 
 log = logging.getLogger(__name__)
 
-# Исправленные regex — не требуют trailing slash
 _WB_ARTICLE   = re.compile(r"[/=](\d{6,12})(?:[/?#]|$|\.aspx)")
 _OZON_ARTICLE = re.compile(r"/product/[^/]+-(\d+)/?")
 
-_WB_API_V2     = "https://card.wb.ru/cards/v2/detail"
-_WB_API_V1     = "https://catalog.wb.ru/cards/v1/detail"
 _WB_SEARCH_API = "https://search.wb.ru/exactmatch/ru/common/v4/search"
 
 _HEADERS = {
@@ -36,6 +33,7 @@ _HEADERS = {
                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept-Language": "ru-RU,ru;q=0.9",
     "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.wildberries.ru/",
 }
 _TIMEOUT      = aiohttp.ClientTimeout(total=20)
 _TIMEOUT_FAST = aiohttp.ClientTimeout(total=8)
@@ -43,16 +41,10 @@ _TIMEOUT_FAST = aiohttp.ClientTimeout(total=8)
 
 async def parse_url(url: str) -> ProductData | None:
     """
-    Парсит карточку по URL. Автоматически разрешает редиректы.
+    Парсит карточку по URL.
     Возвращает None если URL не распознан как WB/Ozon.
     """
     url = url.strip()
-
-    # Разрешаем редиректы (короткие ссылки, мобильные версии)
-    resolved = await _resolve_redirects(url)
-    if resolved != url:
-        log.info("URL resolved: %s → %s", url[:60], resolved[:60])
-        url = resolved
 
     if "wildberries.ru" in url or "wb.ru" in url:
         return await _parse_wb(url)
@@ -63,23 +55,9 @@ async def parse_url(url: str) -> ProductData | None:
     return None
 
 
-async def _resolve_redirects(url: str) -> str:
-    """Следует редиректам и возвращает финальный URL."""
-    try:
-        async with aiohttp.ClientSession(timeout=_TIMEOUT_FAST) as session:
-            async with session.get(
-                url, headers=_HEADERS, allow_redirects=True, max_redirects=5
-            ) as resp:
-                return str(resp.url)
-    except Exception as e:
-        log.debug("Redirect resolution failed for %s: %s", url[:60], e)
-        return url
-
-
 # ─── Wildberries ──────────────────────────────────────────────────────────────
 
 async def _parse_wb(url: str) -> ProductData | None:
-    # Ищем артикул в URL
     m = _WB_ARTICLE.search(url)
     if not m:
         log.warning("WB: no article found in URL: %s", url[:80])
@@ -89,13 +67,14 @@ async def _parse_wb(url: str) -> ProductData | None:
     log.info("WB: article_id=%s", article_id)
     product = ProductData(article_id=article_id, marketplace="wb", url=url)
 
-    # Пробуем v2, потом v1
-    data = await _wb_api_v2(article_id)
-    if not data:
-        log.info("WB v2 failed, trying v1 for article %s", article_id)
-        data = await _wb_api_v1(article_id)
+    # Попытка 1: Search API с артикулом как запросом
+    data = await _wb_search_by_article(article_id)
 
-    if data:
+    # Попытка 2: HTML scraping страницы
+    if not data:
+        log.info("WB: search failed, trying HTML scrape for %s", article_id)
+        await _wb_html_scrape(product, url)
+    else:
         product.title         = data.get("name", "")
         product.brand         = data.get("brand", "")
         product.rating        = float(data.get("rating", 0) or 0)
@@ -103,64 +82,127 @@ async def _parse_wb(url: str) -> ProductData | None:
         product.images_count  = int(data.get("pics", 0) or 0)
         product.category      = _wb_category(data.get("subjectName", ""))
 
-        sale_price_u  = data.get("salePriceU") or 0
-        orig_price_u  = data.get("priceU") or sale_price_u
+        sale_price_u = data.get("salePriceU") or 0
+        orig_price_u = data.get("priceU") or sale_price_u
         if sale_price_u:
             product.price          = int(sale_price_u) // 100
             product.original_price = int(orig_price_u) // 100
 
-        log.info("WB: parsed '%s' (brand=%s, price=%s, rating=%s, pics=%s)",
+        log.info("WB search: parsed '%s' brand=%s price=%s rating=%s pics=%s",
                  product.title[:40], product.brand, product.price,
                  product.rating, product.images_count)
-    else:
-        log.warning("WB: API returned no data for article %s", article_id)
 
-    # Дополнительно пробуем получить описание
     if product.title and not product.description:
         product.description = await _wb_description(article_id, url)
+
+    if not product.title:
+        log.warning("WB: no title found for article %s", article_id)
 
     return product
 
 
-async def _wb_api_v2(article_id: str) -> dict | None:
-    try:
-        # spp=30 обязателен — без него WB возвращает пустой products []
-        params = {
-            "appType": "1", "curr": "rub", "dest": "-1257786",
-            "spp": "30", "nm": article_id,
-        }
-        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
-            async with session.get(_WB_API_V2, params=params, headers=_HEADERS) as resp:
-                if resp.status != 200:
-                    log.debug("WB API v2: HTTP %d for article %s", resp.status, article_id)
-                    return None
-                data = await resp.json(content_type=None)
-        items = data.get("data", {}).get("products", [])
-        if not items:
-            log.debug("WB API v2: empty products for article %s (raw keys: %s)",
-                      article_id, list(data.keys())[:5])
-        return items[0] if items else None
-    except Exception as e:
-        log.debug("WB API v2 exception: %s", e)
-        return None
-
-
-async def _wb_api_v1(article_id: str) -> dict | None:
+async def _wb_search_by_article(article_id: str) -> dict | None:
+    """
+    Ищет товар через search.wb.ru с артикулом как поисковым запросом.
+    Возвращает первый найденный товар с совпадающим id.
+    """
     try:
         params = {
             "appType": "1", "curr": "rub", "dest": "-1257786",
-            "spp": "30", "nm": article_id,
+            "spp": "30", "query": article_id,
+            "resultset": "catalog", "sort": "popular",
+            "regions": "80,38,83,4,64,33,68,70,30,40,86,75,69,1,31,66,110,48,22,71,114",
         }
         async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
-            async with session.get(_WB_API_V1, params=params, headers=_HEADERS) as resp:
+            async with session.get(_WB_SEARCH_API, params=params, headers=_HEADERS) as resp:
+                log.debug("WB search API: HTTP %d for article %s", resp.status, article_id)
                 if resp.status != 200:
                     return None
                 data = await resp.json(content_type=None)
-        items = (data.get("data", {}) or {}).get("products", [])
-        return items[0] if items else None
+
+        products = data.get("data", {}).get("products", [])
+        if not products:
+            log.debug("WB search: empty products for article %s", article_id)
+            return None
+
+        # Ищем точное совпадение по id
+        article_int = int(article_id)
+        for p in products:
+            if p.get("id") == article_int:
+                return p
+
+        # Если точного совпадения нет — берём первый результат
+        log.debug("WB search: no exact match for %s, using first result (id=%s)",
+                  article_id, products[0].get("id"))
+        return products[0]
+
     except Exception as e:
-        log.debug("WB API v1 exception: %s", e)
+        log.debug("WB search exception for %s: %s", article_id, e)
         return None
+
+
+async def _wb_html_scrape(product: ProductData, url: str) -> None:
+    """Парсит HTML страницу WB для получения данных карточки."""
+    try:
+        html_headers = {
+            **_HEADERS,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        }
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            async with session.get(url, headers=html_headers) as resp:
+                log.debug("WB HTML: HTTP %d for %s", resp.status, url[:60])
+                if resp.status != 200:
+                    return
+                html = await resp.text()
+
+        # og:title
+        if m := re.search(r'<meta\s+(?:property|name)="og:title"\s+content="([^"]+)"', html):
+            product.title = m.group(1).strip()
+
+        # og:description
+        if m := re.search(r'<meta\s+(?:property|name)="og:description"\s+content="([^"]+)"', html):
+            product.description = m.group(1).strip()
+
+        # JSON-LD Product
+        for ld_match in re.finditer(
+            r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', html, re.S
+        ):
+            try:
+                ld = json.loads(ld_match.group(1))
+                items = ld if isinstance(ld, list) else [ld]
+                for item in items:
+                    if item.get("@type") != "Product":
+                        continue
+                    if not product.title and item.get("name"):
+                        product.title = item["name"]
+                    if not product.brand and item.get("brand"):
+                        b = item["brand"]
+                        product.brand = b.get("name", "") if isinstance(b, dict) else str(b)
+                    if not product.description and item.get("description"):
+                        product.description = item["description"][:800]
+                    agg = item.get("aggregateRating", {})
+                    if isinstance(agg, dict) and not product.rating:
+                        try:
+                            product.rating = float(agg.get("ratingValue", 0))
+                            product.reviews_count = int(agg.get("reviewCount", 0))
+                        except (ValueError, TypeError):
+                            pass
+                    offers = item.get("offers", {})
+                    if isinstance(offers, dict) and not product.price:
+                        raw = offers.get("price") or offers.get("lowPrice", "")
+                        try:
+                            product.price = int(float(str(raw).replace(" ", "").replace(",", ".")))
+                        except (ValueError, TypeError):
+                            pass
+                    break
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        if product.title:
+            log.info("WB HTML scrape: got title '%s'", product.title[:40])
+
+    except Exception as e:
+        log.warning("WB HTML scrape error for %s: %s", url[:60], e)
 
 
 async def _wb_description(article_id: str, url: str) -> str:
@@ -187,20 +229,19 @@ async def get_wb_competitors(title: str, n: int = 5) -> list[dict]:
     """
     Возвращает топ N конкурентов из WB поиска по ключевым словам из title.
     Данные: title, brand, price, rating, reviews_count, article_id.
-    Используется модулем анализа для конкурентного сравнения.
     """
     if not title:
         return []
 
-    # Берём первые 3-4 слова как поисковый запрос
     words = title.strip().split()
     query = " ".join(words[:4])
 
     try:
         params = {
-            "TestGroup": "no_test", "TestID": "no_test",
             "appType": "1", "curr": "rub", "dest": "-1257786",
-            "query": query, "resultset": "catalog", "sort": "popular",
+            "spp": "30", "query": query,
+            "resultset": "catalog", "sort": "popular",
+            "regions": "80,38,83,4,64,33,68,70,30,40,86,75,69,1,31,66,110,48,22,71,114",
         }
         async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
             async with session.get(_WB_SEARCH_API, params=params, headers=_HEADERS) as resp:
@@ -210,9 +251,8 @@ async def get_wb_competitors(title: str, n: int = 5) -> list[dict]:
                 data = await resp.json(content_type=None)
 
         products = data.get("data", {}).get("products", [])
-
         result = []
-        for p in products[:n + 2]:  # берём чуть больше на случай фильтрации
+        for p in products[:n + 2]:
             p_price = (p.get("salePriceU") or p.get("priceU") or 0) // 100
             result.append({
                 "title":      p.get("name", ""),
@@ -248,7 +288,6 @@ async def _parse_ozon(url: str) -> ProductData | None:
     article_id = m.group(1) if m else ""
     product = ProductData(article_id=article_id, marketplace="ozon", url=url)
 
-    # Извлекаем путь продукта для API (например /product/sumka-sakvoyazh-1864746098/)
     parsed = urlparse(url)
     product_path = parsed.path.rstrip("/") + "/"
 
@@ -256,14 +295,14 @@ async def _parse_ozon(url: str) -> ProductData | None:
     if product_path.startswith("/product/"):
         await _ozon_json_api(product, product_path)
 
-    # Попытка 2: HTML + JSON-LD (если JSON API не дал данных)
+    # Попытка 2: HTML + JSON-LD
     if not product.title:
         await _ozon_html_scrape(product, url)
 
     if product.title:
         if product.category == "other":
             product.category = _wb_category(product.title)
-        log.info("Ozon: parsed '%s' (price=%s, rating=%s)",
+        log.info("Ozon: parsed '%s' price=%s rating=%s",
                  product.title[:40], product.price, product.rating)
     else:
         log.warning("Ozon: no title found for %s", url[:60])
@@ -277,8 +316,8 @@ async def _ozon_json_api(product: ProductData, product_path: str) -> None:
     try:
         async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
             async with session.get(api_url, headers=_OZON_API_HEADERS) as resp:
+                log.debug("Ozon JSON API: HTTP %d for %s", resp.status, product_path)
                 if resp.status != 200:
-                    log.debug("Ozon JSON API: HTTP %d for %s", resp.status, product_path)
                     return
                 data = await resp.json(content_type=None)
 
@@ -318,8 +357,8 @@ async def _ozon_html_scrape(product: ProductData, url: str) -> None:
         headers = {**_HEADERS, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
         async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
             async with session.get(url, headers=headers) as resp:
+                log.debug("Ozon HTML: HTTP %d for %s", resp.status, url[:60])
                 if resp.status != 200:
-                    log.warning("Ozon HTML: HTTP %d for %s", resp.status, url[:60])
                     return
                 html_text = await resp.text()
 

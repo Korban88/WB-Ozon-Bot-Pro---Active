@@ -1,6 +1,16 @@
-# WB/Ozon AI Studio — Концепция и архитектура (v3)
+# WB/Ozon AI Studio — Концепция и архитектура (v4)
 
 > Читай этот файл в начале нового диалога, чтобы сразу войти в контекст.
+
+---
+
+## Быстрый старт (новый компьютер / новый диалог)
+
+1. Репозиторий: `git clone` → локальная папка `C:\Claude Code Projects\wb-ozon-bot\`
+2. Сервер: VPS, бот запущен через `systemd` (`systemctl restart wb-ozon-bot`)
+3. Деплой изменений: `git pull && systemctl restart wb-ozon-bot` на VPS
+
+Если что-то не работает — читай раздел «Известные особенности» внизу.
 
 ---
 
@@ -14,11 +24,11 @@ Telegram-бот для продавцов на Wildberries и Ozon. Работа
 
 | # | Кнопка | Что делает |
 |---|---|---|
-| 1 | 🔍 Анализ карточки | Парсит URL с WB или Ozon, анализирует карточку AI и выдаёт оценку + рекомендации |
-| 2 | 🖼 Создать визуалы | Генерирует 5 Premium Visuals (атмосферные сцены с товаром, без текста) |
-| 3 | 📊 Инфографика | Генерирует ТЗ для 5 инфографических слайдов (текстовый бриф, не картинки) |
-| 4 | 📣 Рекламные тексты | SEO-листинг + рекламный копипак (хуки, объявления, посты) |
-| 5 | 🎬 UGC сценарий | Пишет сценарий короткого видео (хук + сцены + CTA) |
+| 1 | 🔍 Аудит карточки | Парсит URL с WB или Ozon, выдаёт CTR-скор (без LLM) + AI-анализ с конкурентами |
+| 2 | 🖼 5 визуалов | Генерирует 5 изображений для карточки (атмосферные сцены с товаром) |
+| 3 | 📊 Инфографика | ТЗ для 5 инфографических слайдов (текстовый бриф для дизайнера) |
+| 4 | 📣 Тексты карточки | SEO-листинг: название, описание, буллеты |
+| 5 | 🎬 Сценарий видео | Сценарий короткого ролика для соцсетей (хук + сцены + CTA) |
 
 ---
 
@@ -43,9 +53,9 @@ Telegram-бот для продавцов на Wildberries и Ozon. Работа
 Данные о товаре сохраняются в FSM-сессии. Если пользователь уже сделал анализ карточки — все остальные модули пропускают вопросы и сразу генерируют, используя те же данные.
 
 Порядок заполнения данных:
-- Модуль 1 (Анализ) → парсит URL и сохраняет полную ProductData
+- Модуль 1 (Аудит) → парсит URL и сохраняет полную ProductData
 - Модули 2–5 → проверяют `product.has_content()` и пропускают ввод если данные есть
-- Если данных нет → каждый модуль собирает минимум: название + преимущества (+ категорию и фото для визуалов)
+- Если данных нет → каждый модуль собирает минимум: название + преимущества
 
 ---
 
@@ -59,13 +69,33 @@ Telegram-бот для продавцов на Wildberries и Ozon. Работа
 
 ---
 
-## Как работает парсинг URL
+## Как работает парсинг URL (v4)
 
-**Wildberries:** регулярным выражением извлекает article_id из URL → делает запрос к публичному API `card.wb.ru/cards/v2/detail` → получает название, бренд, цену, рейтинг, количество отзывов, категорию.
+### Wildberries
+1. Regex извлекает `article_id` из URL (например `387710847` из `/catalog/387710847/detail.aspx`)
+2. **Основной метод:** запрос к `search.wb.ru/exactmatch/ru/common/v4/search` с артикулом как поисковым запросом + `regions` параметр. Ищет точное совпадение по id, иначе берёт первый результат.
+3. **Fallback:** HTML scraping страницы товара (og:title, og:description, JSON-LD)
+4. **Почему не card.wb.ru:** endpoint `card.wb.ru/cards/v2/detail` вернул 404 начиная с марта 2026 — WB убрали этот публичный API.
 
-**Ozon:** скачивает HTML страницы → извлекает `og:title` и `og:description`. Без JS, без Selenium.
+### Ozon
+1. Regex извлекает `article_id` из URL
+2. **Основной метод:** внутренний Ozon JSON API (`/api/entrypoint-api.bx/page/json/v2?url=/product/...`) — парсит widgetStates (webProductHeading → title, webPrice → price, webRatingBar → rating)
+3. **Fallback:** HTML scraping страницы (og:title, JSON-LD). Может блокироваться Cloudflare.
 
-Если URL не распознан или парсинг не дал названия товара — бот сообщает об ошибке и предлагает ввести данные вручную.
+Если парсинг не дал title — бот предлагает ввести данные вручную.
+
+### Конкуренты WB
+`get_wb_competitors(title, n=5)` — поиск через search.wb.ru по первым 4 словам из названия. Используется в Аудите для сравнения.
+
+---
+
+## CTR Score (детерминированный, без LLM)
+
+`services/audit_engine.py`:
+- `calculate_ctr_score(product)` — скоринг 0-99 по 6 факторам: длина названия, рейтинг, количество отзывов, количество фото, скидка, бренд
+- `format_ctr_block(ctr)` — HTML-блок с прогресс-баром `█████░░░░░  54/100`
+
+Отправляется первым сообщением (быстро), LLM-анализ — вторым (после ожидания).
 
 ---
 
@@ -85,33 +115,36 @@ Telegram-бот для продавцов на Wildberries и Ozon. Работа
 
 ---
 
-## Структура файлов (v3)
+## Структура файлов
 
 ```
 bot.py              Точка входа. Регистрирует 6 роутеров, запускает polling.
 config.py           Читает .env, валидирует обязательные переменные.
 states.py           FSM-состояния: Menu, Analysis, Visuals, Copy, Infographic, UGC.
 keyboards.py        Inline-клавиатуры для каждого экрана.
+logger_setup.py     Логирование: log_event/log_error → logs/dialog.log
 
 bot/                Обработчики Telegram (по одному на модуль)
   menu.py           /start, /menu, menu:main — показывает главное меню.
-  analysis.py       Модуль 1: парсинг URL + AI-анализ карточки.
+  analysis.py       Модуль 1: парсинг URL + CTR score + AI-анализ.
   visuals.py        Модуль 2: генерация 5 Premium Visuals.
   infographic.py    Модуль 3: бриф для 5 инфографических слайдов.
   copy.py           Модуль 4: SEO-листинг + рекламный копипак.
   ugc.py            Модуль 5: UGC видео-сценарий.
 
 core/               Бизнес-логика (без Telegram)
-  analysis_engine.py   analyze_card() → структурированный AI-анализ.
+  analysis_engine.py   analyze_card() → структурированный AI-анализ + конкуренты.
   copy_generation.py   4 функции генерации текста с _NO_HALLUCINATION.
   image_generation.py  generate_visual_pack() → async generator, 5 изображений.
 
 models/
   product_data.py   ProductData dataclass. to_state_dict() / from_state_dict().
                     has_content() → bool. to_brief() → строка для LLM.
+                    discount_pct (property). Поля: images_count, original_price.
 
 services/
-  marketplace_parser.py  parse_url() → ProductData. WB API + Ozon og:meta.
+  marketplace_parser.py  parse_url() → ProductData. WB search API + HTML scrape.
+  audit_engine.py        calculate_ctr_score() + format_ctr_block(). Без LLM.
   openrouter.py          Тонкий HTTP-клиент: call() + parse_json().
   scene_gen.py           Генерирует фон через gpt-image-1 (товар не попадает).
   card_renderer.py       render_card(): сцена + товар → PNG. Без текста.
@@ -139,22 +172,15 @@ services/
 
 | Ситуация | Как работает |
 |---|---|
+| WB search API вернул 429 (rate limit) | Пробуем HTML scraping страницы товара |
+| card.wb.ru/cards/v2 → 404 | Это ожидаемо — WB убрали этот endpoint. Используется search API |
+| Ozon заблокировал по IP (Cloudflare 403) | JSON API может работать даже когда HTML блокируется |
 | OPENAI_API_KEY не указан | Визуалы генерируются через Pillow-градиент вместо AI-сцен |
 | rembg не установлен | Фон вырезается через Pillow corner-sampling (для студийных фото ОК) |
-| URL WB не распарсился | Бот сообщает об ошибке, предлагает ввести данные вручную |
+| URL не распарсился | Бот сообщает об ошибке, предлагает ввести данные вручную |
 | Данные уже есть в сессии | Модули 2–5 пропускают вопросы и генерируют сразу |
 | JSON от AI с markdown-обёрткой | parse_json() автоматически срезает ```json ... ``` |
-| FSM MemoryStorage | Данные сессии теряются при перезапуске бота |
-
----
-
-## Что пока не реализовано
-
-- Форматы 1:1 и 9:16 для визуалов
-- Видео-генерация (Higgsfield или другое)
-- Подписки и тарифы (SaaS)
-- Bulk-обработка нескольких товаров
-- Персистентное хранилище (Redis FSM)
+| FSM MemoryStorage | Данные сессии теряются при перезапуске бота — это норма |
 
 ---
 
@@ -163,3 +189,5 @@ services/
 **v1** — базовый диалог с текстом карточки + 5 дизайн-концептов через Pillow.
 **v2** — Premium Visuals без текста + Ad Copy Pack. Убрана Pillow-типографика.
 **v3** — полный рерайт: AI Studio с 5 модулями, новая архитектура bot/core/services/models, меню-навигация, парсинг URL маркетплейсов, общий ProductData между модулями, антигаллюцинационные правила в каждом промте.
+**v3.1** — CTR Score (детерминированный, без LLM). Интеграция в Аудит. ProductData: поля images_count, original_price, discount_pct. Упрощён текст меню (убраны термины Visual Pack, UGC, blueprint).
+**v4** — WB парсер переписан: search.wb.ru вместо card.wb.ru (endpoint умер). Добавлен HTML scrape как fallback для WB. Убран _resolve_redirects (не нужен). Ozon: dual-strategy без изменений.
