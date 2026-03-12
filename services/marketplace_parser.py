@@ -99,14 +99,18 @@ async def _parse_wb(url: str) -> ProductData | None:
         product.brand         = data.get("brand", "")
         product.rating        = float(data.get("rating", 0) or 0)
         product.reviews_count = int(data.get("feedbacks", 0) or 0)
+        product.images_count  = int(data.get("pics", 0) or 0)
         product.category      = _wb_category(data.get("subjectName", ""))
 
-        price_raw = data.get("salePriceU") or data.get("priceU") or 0
-        if price_raw:
-            product.price = int(price_raw) // 100
+        sale_price_u  = data.get("salePriceU") or 0
+        orig_price_u  = data.get("priceU") or sale_price_u
+        if sale_price_u:
+            product.price          = int(sale_price_u) // 100
+            product.original_price = int(orig_price_u) // 100
 
-        log.info("WB: parsed '%s' (brand=%s, price=%s, rating=%s)",
-                 product.title[:40], product.brand, product.price, product.rating)
+        log.info("WB: parsed '%s' (brand=%s, price=%s, rating=%s, pics=%s)",
+                 product.title[:40], product.brand, product.price,
+                 product.rating, product.images_count)
     else:
         log.warning("WB: API returned no data for article %s", article_id)
 

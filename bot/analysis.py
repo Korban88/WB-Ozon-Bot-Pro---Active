@@ -20,6 +20,7 @@ from core.analysis_engine import analyze_card
 from keyboards import after_analysis_keyboard, analysis_fallback_keyboard, main_menu_keyboard
 from logger_setup import log_error, log_event
 from models.product_data import ProductData
+from services.audit_engine import calculate_ctr_score, format_ctr_block
 from services.marketplace_parser import get_wb_competitors, parse_url
 from states import Analysis, Menu
 
@@ -191,23 +192,33 @@ async def _run_analysis(
     if progress_msg:
         await progress_msg.delete()
 
-    # Заголовок карточки
+    # ── Заголовок карточки ─────────────────────────────────────────────────────
     header = f"📦 <b>{_e(product.title)}</b>"
     if product.brand:         header += f" · {_e(product.brand)}"
-    if product.price:         header += f"\n💰 {product.price:,}₽".replace(",", " ")
+    if product.price:
+        price_str = f"{product.price:,}".replace(",", " ")
+        header += f"\n💰 {price_str}₽"
+        if product.discount_pct:
+            header += f" <i>(-{product.discount_pct}%)</i>"
     if product.rating:        header += f" · ⭐ {product.rating}"
     if product.reviews_count: header += f" ({product.reviews_count:,} отз.)".replace(",", " ")
+    if product.images_count:  header += f" · 📸 {product.images_count} фото"
     if product.article_id:    header += f"\n🔗 Артикул: {product.article_id}"
     if competitors:           header += f"\n🔍 Найдено конкурентов: {len(competitors)}"
-    header += "\n\n"
 
-    full_text = header + analysis_text
+    # ── CTR Score (deterministic, no LLM) ─────────────────────────────────────
+    ctr       = calculate_ctr_score(product)
+    ctr_block = format_ctr_block(ctr)
 
+    # Отправляем заголовок + CTR score ПЕРВЫМ сообщением (всегда быстро)
+    await message.answer(header + "\n\n" + ctr_block, parse_mode="HTML")
+
+    # ── LLM-анализ ─────────────────────────────────────────────────────────────
     # Разбиваем если длиннее лимита Telegram
-    if len(full_text) <= 4096:
-        await message.answer(full_text, parse_mode="HTML")
+    if len(analysis_text) <= 4096:
+        await message.answer(analysis_text, parse_mode="HTML")
     else:
-        await message.answer(header + analysis_text[:3800] + "\n\n<i>…продолжение →</i>", parse_mode="HTML")
+        await message.answer(analysis_text[:3800] + "\n\n<i>…продолжение →</i>", parse_mode="HTML")
         await message.answer(analysis_text[3800:4096 * 2], parse_mode="HTML")
 
     await message.answer(
