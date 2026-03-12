@@ -15,6 +15,7 @@
 import re
 import json
 import logging
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -123,7 +124,11 @@ async def _parse_wb(url: str) -> ProductData | None:
 
 async def _wb_api_v2(article_id: str) -> dict | None:
     try:
-        params = {"appType": "1", "curr": "rub", "dest": "-1257786", "nm": article_id}
+        # spp=30 обязателен — без него WB возвращает пустой products []
+        params = {
+            "appType": "1", "curr": "rub", "dest": "-1257786",
+            "spp": "30", "nm": article_id,
+        }
         async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
             async with session.get(_WB_API_V2, params=params, headers=_HEADERS) as resp:
                 if resp.status != 200:
@@ -131,6 +136,9 @@ async def _wb_api_v2(article_id: str) -> dict | None:
                     return None
                 data = await resp.json(content_type=None)
         items = data.get("data", {}).get("products", [])
+        if not items:
+            log.debug("WB API v2: empty products for article %s (raw keys: %s)",
+                      article_id, list(data.keys())[:5])
         return items[0] if items else None
     except Exception as e:
         log.debug("WB API v2 exception: %s", e)
@@ -139,7 +147,10 @@ async def _wb_api_v2(article_id: str) -> dict | None:
 
 async def _wb_api_v1(article_id: str) -> dict | None:
     try:
-        params = {"appType": "1", "curr": "rub", "dest": "-1257786", "nm": article_id}
+        params = {
+            "appType": "1", "curr": "rub", "dest": "-1257786",
+            "spp": "30", "nm": article_id,
+        }
         async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
             async with session.get(_WB_API_V1, params=params, headers=_HEADERS) as resp:
                 if resp.status != 200:
@@ -224,33 +235,102 @@ async def get_wb_competitors(title: str, n: int = 5) -> list[dict]:
 
 # ─── Ozon ─────────────────────────────────────────────────────────────────────
 
+_OZON_API_HEADERS = {
+    **_HEADERS,
+    "Accept": "application/json, text/plain, */*",
+    "x-o3-app-name": "ozon-front",
+    "x-o3-app-version": "3.73.0",
+}
+
+
 async def _parse_ozon(url: str) -> ProductData | None:
     m = _OZON_ARTICLE.search(url)
-    product = ProductData(
-        article_id=m.group(1) if m else "",
-        marketplace="ozon",
-        url=url,
-    )
+    article_id = m.group(1) if m else ""
+    product = ProductData(article_id=article_id, marketplace="ozon", url=url)
 
+    # Извлекаем путь продукта для API (например /product/sumka-sakvoyazh-1864746098/)
+    parsed = urlparse(url)
+    product_path = parsed.path.rstrip("/") + "/"
+
+    # Попытка 1: Ozon internal JSON API
+    if product_path.startswith("/product/"):
+        await _ozon_json_api(product, product_path)
+
+    # Попытка 2: HTML + JSON-LD (если JSON API не дал данных)
+    if not product.title:
+        await _ozon_html_scrape(product, url)
+
+    if product.title:
+        if product.category == "other":
+            product.category = _wb_category(product.title)
+        log.info("Ozon: parsed '%s' (price=%s, rating=%s)",
+                 product.title[:40], product.price, product.rating)
+    else:
+        log.warning("Ozon: no title found for %s", url[:60])
+
+    return product
+
+
+async def _ozon_json_api(product: ProductData, product_path: str) -> None:
+    """Пробует получить данные через внутренний Ozon API."""
+    api_url = f"https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url={product_path}"
+    try:
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            async with session.get(api_url, headers=_OZON_API_HEADERS) as resp:
+                if resp.status != 200:
+                    log.debug("Ozon JSON API: HTTP %d for %s", resp.status, product_path)
+                    return
+                data = await resp.json(content_type=None)
+
+        widgets = data.get("widgetStates", {})
+        for key, value in widgets.items():
+            try:
+                w = json.loads(value) if isinstance(value, str) else value
+                if not isinstance(w, dict):
+                    continue
+
+                if "webProductHeading" in key and not product.title:
+                    product.title = w.get("title", "")
+
+                if "webPrice" in key and not product.price:
+                    raw = w.get("price", w.get("originalPrice", ""))
+                    digits = re.sub(r"[^\d]", "", str(raw))
+                    if digits:
+                        product.price = int(digits)
+
+                if ("webReviewProductScore" in key or "webRatingBar" in key) and not product.rating:
+                    product.rating = float(w.get("score", w.get("rating", 0)) or 0)
+                    product.reviews_count = int(w.get("count", w.get("reviewCount", 0)) or 0)
+
+            except Exception:
+                continue
+
+        if product.title:
+            log.debug("Ozon JSON API: got title '%s'", product.title[:40])
+
+    except Exception as e:
+        log.debug("Ozon JSON API failed for %s: %s", product_path, e)
+
+
+async def _ozon_html_scrape(product: ProductData, url: str) -> None:
+    """Резервный метод: HTML + JSON-LD парсинг."""
     try:
         headers = {**_HEADERS, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
         async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
             async with session.get(url, headers=headers) as resp:
                 if resp.status != 200:
-                    log.warning("Ozon: HTTP %d for %s", resp.status, url[:60])
-                    return product
-                html = await resp.text()
+                    log.warning("Ozon HTML: HTTP %d for %s", resp.status, url[:60])
+                    return
+                html_text = await resp.text()
 
-        # og:title
-        if m := re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html):
+        if m := re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html_text):
             product.title = m.group(1).strip()
-
-        # og:description
-        if m := re.search(r'<meta\s+property="og:description"\s+content="([^"]+)"', html):
+        if m := re.search(r'<meta\s+property="og:description"\s+content="([^"]+)"', html_text):
             product.description = m.group(1).strip()
 
-        # JSON-LD — богатые данные
-        for ld_match in re.finditer(r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', html, re.S):
+        for ld_match in re.finditer(
+            r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', html_text, re.S
+        ):
             try:
                 ld = json.loads(ld_match.group(1))
                 items = ld if isinstance(ld, list) else [ld]
@@ -259,19 +339,19 @@ async def _parse_ozon(url: str) -> ProductData | None:
                         if not product.title and item.get("name"):
                             product.title = item["name"]
                         if not product.brand and item.get("brand"):
-                            brand = item["brand"]
-                            product.brand = brand.get("name", "") if isinstance(brand, dict) else str(brand)
+                            b = item["brand"]
+                            product.brand = b.get("name", "") if isinstance(b, dict) else str(b)
                         if not product.description and item.get("description"):
                             product.description = item["description"][:800]
                         offers = item.get("offers", {})
-                        if isinstance(offers, dict):
-                            price_str = offers.get("price", "") or offers.get("lowPrice", "")
+                        if isinstance(offers, dict) and not product.price:
+                            raw = offers.get("price") or offers.get("lowPrice", "")
                             try:
-                                product.price = int(float(str(price_str).replace(" ", "").replace(",", ".")))
+                                product.price = int(float(str(raw).replace(" ", "").replace(",", ".")))
                             except (ValueError, TypeError):
                                 pass
                         agg = item.get("aggregateRating", {})
-                        if isinstance(agg, dict):
+                        if isinstance(agg, dict) and not product.rating:
                             try:
                                 product.rating = float(agg.get("ratingValue", 0))
                                 product.reviews_count = int(agg.get("reviewCount", 0))
@@ -281,17 +361,8 @@ async def _parse_ozon(url: str) -> ProductData | None:
             except (json.JSONDecodeError, KeyError):
                 continue
 
-        if product.title:
-            if product.category == "other":
-                product.category = _wb_category(product.title)
-            log.info("Ozon: parsed '%s' (price=%s, rating=%s)", product.title[:40], product.price, product.rating)
-        else:
-            log.warning("Ozon: no title found for %s", url[:60])
-
     except Exception as e:
-        log.warning("Ozon parse error for %s: %s", url[:60], e)
-
-    return product
+        log.warning("Ozon HTML scrape error for %s: %s", url[:60], e)
 
 
 # ─── Маппинг категорий ────────────────────────────────────────────────────────

@@ -39,12 +39,12 @@ async def cb_start_analysis(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Analysis.wait_url)
     await callback.message.answer(
         "🔍 <b>Аудит карточки</b>\n\n"
-        "Отправь ссылку на карточку товара WB или Ozon.\n\n"
-        "Поддерживаются:\n"
-        "• Полные ссылки WB и Ozon\n"
-        "• Короткие ссылки (wb.ru/...)\n"
-        "• Мобильные ссылки\n\n"
-        "Получишь: CTR-риски, конкурентный анализ и action plan.",
+        "Отправь ссылку на карточку с Wildberries или Ozon.\n\n"
+        "Получишь:\n"
+        "• Оценку карточки по ключевым метрикам\n"
+        "• Главные причины низких продаж\n"
+        "• Конкретные шаги для роста\n"
+        "• Сравнение с конкурентами",
         parse_mode="HTML",
     )
 
