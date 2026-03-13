@@ -15,6 +15,7 @@
 import re
 import json
 import logging
+import time
 from urllib.parse import urlparse
 
 import aiohttp
@@ -27,6 +28,27 @@ _WB_ARTICLE   = re.compile(r"[/=](\d{6,12})(?:[/?#]|$|\.aspx)")
 _OZON_ARTICLE = re.compile(r"/product/[^/]+-(\d+)/?")
 
 _WB_SEARCH_API = "https://search.wb.ru/exactmatch/ru/common/v4/search"
+
+# ─── Кэш продуктов (in-memory, TTL 60 минут) ──────────────────────────────────
+# Структура: {"wb:ARTICLE_ID" | "ozon:URL": (timestamp, ProductData)}
+_CACHE: dict[str, tuple[float, ProductData]] = {}
+_CACHE_TTL = 3600  # секунд
+
+
+def _cache_get(key: str) -> ProductData | None:
+    entry = _CACHE.get(key)
+    if entry and (time.time() - entry[0]) < _CACHE_TTL:
+        log.info("Cache HIT for %s", key)
+        return entry[1]
+    if entry:
+        del _CACHE[key]
+    return None
+
+
+def _cache_set(key: str, product: ProductData) -> None:
+    if product.title:  # кэшируем только успешно распаршенные карточки
+        _CACHE[key] = (time.time(), product)
+        log.info("Cache SET for %s (total cached: %d)", key, len(_CACHE))
 
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -43,13 +65,31 @@ async def parse_url(url: str) -> ProductData | None:
     """
     Парсит карточку по URL.
     Возвращает None если URL не распознан как WB/Ozon.
+    Результат кэшируется на 60 минут по ключу marketplace:article_id.
     """
     url = url.strip()
 
     if "wildberries.ru" in url or "wb.ru" in url:
-        return await _parse_wb(url)
+        m = _WB_ARTICLE.search(url)
+        if m:
+            cache_key = f"wb:{m.group(1)}"
+            if cached := _cache_get(cache_key):
+                return cached
+        product = await _parse_wb(url)
+        if product and m:
+            _cache_set(f"wb:{m.group(1)}", product)
+        return product
+
     if "ozon.ru" in url:
-        return await _parse_ozon(url)
+        m = _OZON_ARTICLE.search(url)
+        if m:
+            cache_key = f"ozon:{m.group(1)}"
+            if cached := _cache_get(cache_key):
+                return cached
+        product = await _parse_ozon(url)
+        if product and m:
+            _cache_set(f"ozon:{m.group(1)}", product)
+        return product
 
     log.warning("URL not recognized as WB/Ozon: %s", url[:80])
     return None
