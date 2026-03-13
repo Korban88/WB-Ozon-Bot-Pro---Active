@@ -104,7 +104,8 @@ async def _parse_wb(url: str) -> ProductData | None:
 async def _wb_search_by_article(article_id: str) -> dict | None:
     """
     Ищет товар через search.wb.ru с артикулом как поисковым запросом.
-    Возвращает первый найденный товар с совпадающим id.
+    Обрабатывает два формата ответа: data.products (старый) и root products (новый).
+    При product-redirect делает второй запрос с параметром catalog.
     """
     try:
         params = {
@@ -120,7 +121,17 @@ async def _wb_search_by_article(article_id: str) -> dict | None:
                     return None
                 data = await resp.json(content_type=None)
 
-        products = data.get("data", {}).get("products", [])
+        # Если WB вернул product-redirect — делаем второй запрос с catalog
+        metadata = data.get("metadata", {})
+        if metadata.get("catalog_type") == "product-redirect":
+            catalog_value = metadata.get("catalog_value", "")
+            log.info("WB: product-redirect for %s, following catalog=%s", article_id, catalog_value)
+            if catalog_value:
+                return await _wb_catalog_by_value(article_id, catalog_value)
+            return None
+
+        # Поддержка обоих форматов: data.products (старый) и root products (новый)
+        products = data.get("data", {}).get("products") or data.get("products", [])
         if not products:
             log.debug("WB search: empty products for article %s", article_id)
             return None
@@ -138,6 +149,44 @@ async def _wb_search_by_article(article_id: str) -> dict | None:
 
     except Exception as e:
         log.debug("WB search exception for %s: %s", article_id, e)
+        return None
+
+
+async def _wb_catalog_by_value(article_id: str, catalog_value: str) -> dict | None:
+    """
+    Follow-up запрос при product-redirect: использует catalog_value для получения товара.
+    WB возвращает этот токен когда ищут по точному артикулу.
+    """
+    try:
+        params = {
+            "appType": "1", "curr": "rub", "dest": "-1257786",
+            "spp": "30", "catalog": catalog_value,
+            "resultset": "catalog", "sort": "popular",
+            "regions": "80,38,83,4,64,33,68,70,30,40,86,75,69,1,31,66,110,48,22,71,114",
+        }
+        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+            async with session.get(_WB_SEARCH_API, params=params, headers=_HEADERS) as resp:
+                log.debug("WB catalog follow-up: HTTP %d for article %s", resp.status, article_id)
+                if resp.status != 200:
+                    return None
+                data = await resp.json(content_type=None)
+
+        products = data.get("data", {}).get("products") or data.get("products", [])
+        if not products:
+            log.debug("WB catalog: empty products for article %s", article_id)
+            return None
+
+        article_int = int(article_id)
+        for p in products:
+            if p.get("id") == article_int:
+                return p
+
+        log.debug("WB catalog: no exact match for %s, using first (id=%s)",
+                  article_id, products[0].get("id"))
+        return products[0]
+
+    except Exception as e:
+        log.debug("WB catalog follow-up exception for %s: %s", article_id, e)
         return None
 
 
@@ -250,7 +299,7 @@ async def get_wb_competitors(title: str, n: int = 5) -> list[dict]:
                     return []
                 data = await resp.json(content_type=None)
 
-        products = data.get("data", {}).get("products", [])
+        products = data.get("data", {}).get("products") or data.get("products", [])
         result = []
         for p in products[:n + 2]:
             p_price = (p.get("salePriceU") or p.get("priceU") or 0) // 100
