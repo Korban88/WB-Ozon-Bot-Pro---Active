@@ -1,4 +1,4 @@
-# WB/Ozon AI Studio — Концепция и архитектура (v4)
+# WB/Ozon AI Studio — Концепция и архитектура (v4.1)
 
 > Читай этот файл в начале нового диалога, чтобы сразу войти в контекст.
 
@@ -7,10 +7,12 @@
 ## Быстрый старт (новый компьютер / новый диалог)
 
 1. Репозиторий: `git clone` → локальная папка `C:\Claude Code Projects\wb-ozon-bot\`
-2. Сервер: VPS, бот запущен через `systemd` (`systemctl restart wb-ozon-bot`)
-3. Деплой изменений: `git pull && systemctl restart wb-ozon-bot` на VPS
+2. Сервер: VPS Beget Ubuntu, IP `31.129.108.93`, пользователь `root`
+3. Бот запущен через `systemd`: `systemctl restart wb-ozon-bot`
+4. Деплой: локально `git push`, на сервере `cd /root/wb-ozon-bot && git pull && systemctl restart wb-ozon-bot`
+5. SSH-ключи добавлены на GitHub — сервер тянет репо напрямую
 
-Если что-то не работает — читай раздел «Известные особенности» внизу.
+Если что-то не работает — читай раздел «Известные особенности» и «Проблема с IP» ниже.
 
 ---
 
@@ -69,23 +71,31 @@ Telegram-бот для продавцов на Wildberries и Ozon. Работа
 
 ---
 
-## Как работает парсинг URL (v4)
+## Как работает парсинг URL (v4.1)
 
 ### Wildberries
 1. Regex извлекает `article_id` из URL (например `387710847` из `/catalog/387710847/detail.aspx`)
-2. **Основной метод:** запрос к `search.wb.ru/exactmatch/ru/common/v4/search` с артикулом как поисковым запросом + `regions` параметр. Ищет точное совпадение по id, иначе берёт первый результат.
-3. **Fallback:** HTML scraping страницы товара (og:title, og:description, JSON-LD)
-4. **Почему не card.wb.ru:** endpoint `card.wb.ru/cards/v2/detail` вернул 404 начиная с марта 2026 — WB убрали этот публичный API.
+2. **Основной метод:** запрос к `search.wb.ru/exactmatch/ru/common/v4/search` с артикулом как query
+3. **Обработка product-redirect:** WB возвращает `catalog_type: product-redirect` + `catalog_value` когда ищешь по точному артикулу — делаем второй запрос с параметром `catalog=<catalog_value>` (добавлено в v4.1)
+4. **Поддержка двух форматов ответа:** `data.products` (старый) и корневой `products` (новый формат WB API) — добавлено в v4.1
+5. **Fallback:** HTML scraping страницы товара (og:title, og:description, JSON-LD)
+6. **Почему не card.wb.ru:** `card.wb.ru/cards/v2/detail` → 404 с марта 2026, WB убрали публичный API
+7. **Почему не basket CDN:** `basket-NN.wb.ru` — часть доменов не резолвится с сервера Beget; `static-basket-NN.wbbasket.ru` — резолвится только basket-01..09, современные артикулы (>~43M) лежат на basket-22+
 
 ### Ozon
 1. Regex извлекает `article_id` из URL
 2. **Основной метод:** внутренний Ozon JSON API (`/api/entrypoint-api.bx/page/json/v2?url=/product/...`) — парсит widgetStates (webProductHeading → title, webPrice → price, webRatingBar → rating)
-3. **Fallback:** HTML scraping страницы (og:title, JSON-LD). Может блокироваться Cloudflare.
+3. **Fallback:** HTML scraping страницы (og:title, JSON-LD)
 
 Если парсинг не дал title — бот предлагает ввести данные вручную.
 
 ### Конкуренты WB
 `get_wb_competitors(title, n=5)` — поиск через search.wb.ru по первым 4 словам из названия. Используется в Аудите для сравнения.
+
+### Кэш парсера (v4.1)
+`services/marketplace_parser.py` содержит in-memory кэш с TTL 60 минут.
+Ключ: `wb:ARTICLE_ID` или `ozon:ARTICLE_ID`. Кэшируются только карточки с непустым title.
+Сбрасывается при перезапуске бота. Снижает нагрузку на WB/Ozon API при повторных запросах одного артикула.
 
 ---
 
@@ -168,19 +178,47 @@ services/
 
 ---
 
+## ⚠️ Проблема с IP сервера (актуально на март 2026)
+
+**Сервер Beget (31.129.108.93) заблокирован обоими маркетплейсами.**
+
+Проверено 13.03.2026:
+
+| Метод | WB | Ozon |
+|---|---|---|
+| search.wb.ru / JSON API | 429 при нагрузке, иначе 200 с пустым результатом | 403 Antibot |
+| HTML scraping | Antibot JS challenge ("Почти готово...") | 403 Antibot Challenge Page |
+| basket CDN (wbbasket.ru) | basket-22+ не резолвится | — |
+
+**Причина:** IP датацентра Beget находится в блок-листах WB и Ozon как известный VPS-провайдер.
+
+**При малом числе пользователей (до 20/день) парсинг может работать** — запросы естественно разнесены во времени и 429 не триггерится. Проблемы начались из-за ~40 тестовых запросов за 2 часа в одной сессии отладки.
+
+**Долгосрочное решение — residential proxy:**
+- Добавить переменную `PROXY_URL` в `.env`
+- Передавать `proxy=PROXY_URL` в `aiohttp.ClientSession.get()`
+- Только для запросов к WB/Ozon, не для OpenRouter/OpenAI
+- Стоимость: ~$5-10/мес (SmartProxy, ProxyEmpire и др.)
+
+**Для тестирования логики** — запустить бота локально на домашнем компьютере (домашний IP не в бане).
+
+---
+
 ## Известные особенности
 
 | Ситуация | Как работает |
 |---|---|
+| WB search вернул product-redirect | Делаем follow-up запрос с параметром `catalog=catalog_value` |
 | WB search API вернул 429 (rate limit) | Пробуем HTML scraping страницы товара |
-| card.wb.ru/cards/v2 → 404 | Это ожидаемо — WB убрали этот endpoint. Используется search API |
-| Ozon заблокировал по IP (Cloudflare 403) | JSON API может работать даже когда HTML блокируется |
+| card.wb.ru/cards/v2 → 404 | Ожидаемо — WB убрали этот endpoint. Используется search API |
+| Ozon заблокировал по IP (Cloudflare 403) | Оба метода (JSON API и HTML) могут блокироваться с VPS IP |
 | OPENAI_API_KEY не указан | Визуалы генерируются через Pillow-градиент вместо AI-сцен |
 | rembg не установлен | Фон вырезается через Pillow corner-sampling (для студийных фото ОК) |
 | URL не распарсился | Бот сообщает об ошибке, предлагает ввести данные вручную |
 | Данные уже есть в сессии | Модули 2–5 пропускают вопросы и генерируют сразу |
 | JSON от AI с markdown-обёрткой | parse_json() автоматически срезает ```json ... ``` |
 | FSM MemoryStorage | Данные сессии теряются при перезапуске бота — это норма |
+| Два экземпляра бота (TelegramConflictError) | Убить старый процесс: `ps aux \| grep bot.py`, затем `kill PID` |
 
 ---
 
@@ -191,3 +229,4 @@ services/
 **v3** — полный рерайт: AI Studio с 5 модулями, новая архитектура bot/core/services/models, меню-навигация, парсинг URL маркетплейсов, общий ProductData между модулями, антигаллюцинационные правила в каждом промте.
 **v3.1** — CTR Score (детерминированный, без LLM). Интеграция в Аудит. ProductData: поля images_count, original_price, discount_pct. Упрощён текст меню (убраны термины Visual Pack, UGC, blueprint).
 **v4** — WB парсер переписан: search.wb.ru вместо card.wb.ru (endpoint умер). Добавлен HTML scrape как fallback для WB. Убран _resolve_redirects (не нужен). Ozon: dual-strategy без изменений.
+**v4.1** — Обработка WB product-redirect (follow-up запрос с `catalog` параметром). Поддержка нового формата ответа WB API (products на корневом уровне). In-memory кэш парсера TTL 60 минут. Задокументирована проблема блокировки IP сервера Beget.
