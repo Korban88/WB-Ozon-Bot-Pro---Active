@@ -145,51 +145,73 @@ async def _wb_search_by_article(article_id: str) -> dict | None:
     """
     Ищет товар через search.wb.ru с артикулом как поисковым запросом.
     Обрабатывает два формата ответа: data.products (старый) и root products (новый).
-    При product-redirect делает второй запрос с параметром catalog.
+    При product-redirect / preset делает второй запрос с параметром catalog.
+    Retry с backoff на 429 (rate limiting).
     """
-    try:
-        params = {
-            "appType": "1", "curr": "rub", "dest": "-1257786",
-            "spp": "30", "query": article_id,
-            "resultset": "catalog", "sort": "popular",
-            "regions": "80,38,83,4,64,33,68,70,30,40,86,75,69,1,31,66,110,48,22,71,114",
-        }
-        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
-            async with session.get(_WB_SEARCH_API, params=params, headers=_HEADERS) as resp:
-                log.debug("WB search API: HTTP %d for article %s", resp.status, article_id)
-                if resp.status != 200:
-                    return None
-                data = await resp.json(content_type=None)
+    import asyncio
 
-        # Если WB вернул product-redirect — делаем второй запрос с catalog
-        metadata = data.get("metadata", {})
-        if metadata.get("catalog_type") == "product-redirect":
-            catalog_value = metadata.get("catalog_value", "")
-            log.info("WB: product-redirect for %s, following catalog=%s", article_id, catalog_value)
-            if catalog_value:
-                return await _wb_catalog_by_value(article_id, catalog_value)
+    params = {
+        "appType": "1", "curr": "rub", "dest": "-1257786",
+        "spp": "30", "query": article_id,
+        "resultset": "catalog", "sort": "popular",
+        "regions": "80,38,83,4,64,33,68,70,30,40,86,75,69,1,31,66,110,48,22,71,114",
+    }
+
+    for attempt in range(3):
+        try:
+            async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+                async with session.get(_WB_SEARCH_API, params=params, headers=_HEADERS) as resp:
+                    log.debug("WB search API: HTTP %d for article %s (attempt %d)",
+                              resp.status, article_id, attempt + 1)
+                    if resp.status == 429:
+                        wait = 2 ** attempt  # 1, 2, 4 сек
+                        log.info("WB: 429 rate limit, retry in %ds (attempt %d/3)", wait, attempt + 1)
+                        await asyncio.sleep(wait)
+                        continue
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json(content_type=None)
+            break  # успешный ответ
+        except Exception as e:
+            log.debug("WB search exception for %s (attempt %d): %s", article_id, attempt + 1, e)
+            if attempt < 2:
+                await asyncio.sleep(1)
+                continue
             return None
-
-        # Поддержка обоих форматов: data.products (старый) и root products (новый)
-        products = data.get("data", {}).get("products") or data.get("products", [])
-        if not products:
-            log.debug("WB search: empty products for article %s", article_id)
-            return None
-
-        # Ищем точное совпадение по id
-        article_int = int(article_id)
-        for p in products:
-            if p.get("id") == article_int:
-                return p
-
-        # Если точного совпадения нет — берём первый результат
-        log.debug("WB search: no exact match for %s, using first result (id=%s)",
-                  article_id, products[0].get("id"))
-        return products[0]
-
-    except Exception as e:
-        log.debug("WB search exception for %s: %s", article_id, e)
+    else:
         return None
+
+    # Если WB вернул product-redirect или preset — делаем второй запрос с catalog
+    metadata = data.get("metadata", {})
+    catalog_type  = metadata.get("catalog_type", "")
+    catalog_value = metadata.get("catalog_value", "")
+
+    if catalog_type in ("product-redirect", "preset"):
+        log.info("WB: %s for %s, following catalog=%s", catalog_type, article_id, catalog_value)
+        if catalog_value:
+            return await _wb_catalog_by_value(article_id, catalog_value)
+        return None
+
+    # Поддержка обоих форматов: data.products (старый) и root products (новый)
+    products = data.get("data", {}).get("products") or data.get("products", [])
+    if not products:
+        log.debug("WB search: empty products for article %s", article_id)
+        return None
+
+    # Ищем точное совпадение по id
+    try:
+        article_int = int(article_id)
+    except ValueError:
+        return None
+
+    for p in products:
+        if p.get("id") == article_int:
+            return p
+
+    # Если точного совпадения нет — берём первый результат
+    log.debug("WB search: no exact match for %s, using first result (id=%s)",
+              article_id, products[0].get("id"))
+    return products[0]
 
 
 async def _wb_catalog_by_value(article_id: str, catalog_value: str) -> dict | None:
