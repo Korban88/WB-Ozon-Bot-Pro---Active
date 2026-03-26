@@ -107,38 +107,124 @@ async def _parse_wb(url: str) -> ProductData | None:
     log.info("WB: article_id=%s", article_id)
     product = ProductData(article_id=article_id, marketplace="wb", url=url)
 
-    # Попытка 1: Search API с артикулом как запросом
-    data = await _wb_search_by_article(article_id)
+    # Попытка 1: Basket CDN (надёжный, не rate-limited, богатые данные)
+    cdn_data = await _wb_basket_cdn(article_id)
+    if cdn_data:
+        product.title        = cdn_data.get("imt_name", "")
+        product.description  = cdn_data.get("description", "")
+        product.brand        = (cdn_data.get("selling") or {}).get("brand_name", "")
+        product.images_count = (cdn_data.get("media") or {}).get("photo_count", 0)
+        product.category     = _wb_category(cdn_data.get("subj_name", ""))
+        log.info("WB CDN: parsed '%s' brand=%s category=%s pics=%s",
+                 product.title[:40], product.brand, product.category, product.images_count)
 
-    # Попытка 2: HTML scraping страницы
-    if not data:
-        log.info("WB: search failed, trying HTML scrape for %s", article_id)
-        await _wb_html_scrape(product, url)
-    else:
-        product.title         = data.get("name", "")
-        product.brand         = data.get("brand", "")
-        product.rating        = float(data.get("rating", 0) or 0)
-        product.reviews_count = int(data.get("feedbacks", 0) or 0)
-        product.images_count  = int(data.get("pics", 0) or 0)
-        product.category      = _wb_category(data.get("subjectName", ""))
-
-        sale_price_u = data.get("salePriceU") or 0
-        orig_price_u = data.get("priceU") or sale_price_u
+    # Попытка 2: Search API (для цены, рейтинга, отзывов; может быть rate-limited)
+    search_data = await _wb_search_by_article(article_id)
+    if search_data:
+        if not product.title:
+            product.title    = search_data.get("name", "")
+            product.brand    = search_data.get("brand", "")
+            product.category = _wb_category(search_data.get("subjectName", ""))
+        product.rating        = float(search_data.get("rating", 0) or 0)
+        product.reviews_count = int(search_data.get("feedbacks", 0) or 0)
+        if not product.images_count:
+            product.images_count = int(search_data.get("pics", 0) or 0)
+        sale_price_u = search_data.get("salePriceU") or 0
+        orig_price_u = search_data.get("priceU") or sale_price_u
         if sale_price_u:
             product.price          = int(sale_price_u) // 100
             product.original_price = int(orig_price_u) // 100
+        log.info("WB search: price=%s rating=%s reviews=%s",
+                 product.price, product.rating, product.reviews_count)
 
-        log.info("WB search: parsed '%s' brand=%s price=%s rating=%s pics=%s",
-                 product.title[:40], product.brand, product.price,
-                 product.rating, product.images_count)
-
-    if product.title and not product.description:
-        product.description = await _wb_description(article_id, url)
+    # Попытка 3: HTML scrape (последний резерв, WB SPA — обычно мало данных)
+    if not product.title:
+        log.info("WB: CDN+search failed, trying HTML scrape for %s", article_id)
+        await _wb_html_scrape(product, url)
 
     if not product.title:
         log.warning("WB: no title found for article %s", article_id)
 
     return product
+
+
+def _wb_basket_number(vol: int) -> int:
+    """
+    Вычисляет номер basket CDN сервера по vol = article_id // 100000.
+    Таблица выверена по известным точкам (vol=2118→14, vol=6770→33).
+    Шаг после basket-14: ~216 единиц vol на basket.
+    """
+    table = [
+        143, 287, 431, 719, 1007, 1061, 1115, 1169, 1313, 1601,
+        1655, 1919, 2045, 2189, 2405, 2621, 2837, 3053, 3269, 3485,
+        3701, 3917, 4133, 4349, 4565, 4781, 4997, 5213, 5429, 5645,
+        5861, 6077, 6293, 6509, 6725, 6941, 7157, 7373, 7589, 7805,
+        8021, 8237, 8453,
+    ]
+    for basket, max_vol in enumerate(table, start=1):
+        if vol <= max_vol:
+            return basket
+    return len(table)  # максимальный известный basket
+
+
+async def _wb_basket_cdn(article_id: str) -> dict | None:
+    """
+    Получает данные карточки из WB basket CDN.
+    Пробует рассчитанный basket, затем ±5, затем все известные (1-43).
+    CDN не rate-limited, возвращает богатые данные: название, описание, характеристики.
+    """
+    import asyncio
+
+    try:
+        nm = int(article_id)
+    except ValueError:
+        return None
+
+    vol  = nm // 100000
+    part = nm // 1000
+
+    approx = _wb_basket_number(vol)
+
+    # Порядок проверки: рассчитанный basket, ±5, затем остальные
+    checked: set[int] = set()
+    priority = list(range(max(1, approx - 2), min(44, approx + 6)))
+    all_baskets = priority + [b for b in range(1, 44) if b not in set(priority)]
+
+    async def try_basket(basket: int) -> dict | None:
+        url = (f"https://basket-{basket:02d}.wbbasket.ru"
+               f"/vol{vol}/part{part}/{article_id}/info/ru/card.json")
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=6)
+            ) as session:
+                async with session.get(url, headers=_HEADERS) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        if isinstance(data, dict) and data.get("nm_id"):
+                            log.info("WB CDN: found article %s on basket-%02d", article_id, basket)
+                            return data
+        except Exception:
+            pass
+        return None
+
+    # Сначала пробуем приоритетный диапазон параллельно
+    tasks = [try_basket(b) for b in priority if b not in checked]
+    checked.update(priority)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, dict):
+            return r
+
+    # Если не нашли — пробуем оставшиеся по одному (быстро останавливаемся при успехе)
+    for b in all_baskets:
+        if b in checked:
+            continue
+        result = await try_basket(b)
+        if result:
+            return result
+
+    log.info("WB CDN: article %s not found in any basket", article_id)
+    return None
 
 
 async def _wb_search_by_article(article_id: str) -> dict | None:
@@ -315,23 +401,6 @@ async def _wb_html_scrape(product: ProductData, url: str) -> None:
     except Exception as e:
         log.warning("WB HTML scrape error for %s: %s", url[:60], e)
 
-
-async def _wb_description(article_id: str, url: str) -> str:
-    """Получает описание из HTML страницы WB."""
-    try:
-        async with aiohttp.ClientSession(timeout=_TIMEOUT_FAST) as session:
-            async with session.get(url, headers=_HEADERS) as resp:
-                if resp.status != 200:
-                    return ""
-                html = await resp.text()
-
-        if m := re.search(r'<meta\s+(?:property|name)="og:description"\s+content="([^"]{15,})"', html):
-            return m.group(1).strip()
-        if m := re.search(r'"description"\s*:\s*"([^"]{25,})"', html):
-            return m.group(1).strip()[:800]
-    except Exception as e:
-        log.debug("WB description fetch failed: %s", e)
-    return ""
 
 
 # ─── Конкуренты WB ───────────────────────────────────────────────────────────
