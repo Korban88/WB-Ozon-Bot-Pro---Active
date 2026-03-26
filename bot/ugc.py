@@ -78,20 +78,26 @@ async def _generate(message, state, user) -> None:
 
     await progress.delete()
 
-    duration  = result.get("duration",  "15-30 сек")
-    fmt       = result.get("format",    "9:16")
-    hook_text = result.get("hook_text", "")
-    scenes    = result.get("scenes",    [])
-    cta       = result.get("cta",       "")
+    duration    = result.get("duration",    "15-30 сек")
+    fmt         = result.get("format",      "9:16")
+    hook        = result.get("hook",        result.get("hook_text", ""))
+    micro_story = result.get("micro_story", "")
+    benefit     = result.get("benefit",     "")
+    scenes      = result.get("scenes",      [])
+    cta         = result.get("cta",         "")
 
     text  = f"🎬 <b>UGC Сценарий — {_e(product.title)}</b>\n"
     text += f"⏱ {_e(duration)} · {_e(fmt)}\n\n"
 
-    if hook_text:
-        text += f"🎯 <b>Хук (первые 3 сек):</b>\n{_e(hook_text)}\n\n"
+    if hook:
+        text += f"🎯 <b>Хук:</b> {_e(hook)}\n\n"
+    if micro_story:
+        text += f"💬 <b>Микро-история:</b> {_e(micro_story)}\n\n"
+    if benefit:
+        text += f"✨ <b>Польза:</b> {_e(benefit)}\n\n"
 
     if scenes:
-        text += "<b>Сцены:</b>"
+        text += "<b>Раскадровка:</b>"
         for s in scenes:
             text += (
                 f"\n\n<b>Сцена {s.get('number','')} <i>({_e(s.get('time',''))})</i></b>\n"

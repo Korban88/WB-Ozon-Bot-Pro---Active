@@ -16,10 +16,13 @@ OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_IMAGE_MODEL: str = "gpt-image-1"
 OPENAI_IMAGE_URL: str = "https://api.openai.com/v1/images/generations"
 
-# ── Together AI (legacy, not used) ────────────────────────────────────────────
-TOGETHER_API_KEY: str = os.getenv("TOGETHER_API_KEY", "")
-TOGETHER_MODEL: str = "black-forest-labs/FLUX.1-schnell-Free"
-TOGETHER_URL: str = "https://api.together.xyz/v1/images/generations"
+# ── Visual Provider ───────────────────────────────────────────────────────────
+# "openai" (default) | "pillow" (no AI, gradient only) | "external" (stub)
+VISUAL_PROVIDER: str = os.getenv("VISUAL_PROVIDER", "openai")
+
+# External visual service (Fabula AI, MPCard, etc.) — fill when ready
+EXTERNAL_VISUAL_API_KEY: str = os.getenv("EXTERNAL_VISUAL_API_KEY", "")
+EXTERNAL_VISUAL_API_URL: str = os.getenv("EXTERNAL_VISUAL_API_URL", "")
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
